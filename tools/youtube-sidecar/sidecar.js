@@ -96,14 +96,17 @@ function log(...args) {
 
 function runYtdlp(args, timeoutMs) {
   return new Promise((resolve, reject) => {
-    execFile(CONFIG.ytdlpPath, args, {
+    execFile(CONFIG.ytdlpPath, ["--ignore-config", "--no-cache-dir", ...args], {
       windowsHide: true,
+      cwd: ROOT,
       timeout: timeoutMs || 60000,
       maxBuffer: 64 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (error) {
-        const detail = String(stderr || error.message || "").trim().split(/\r?\n/).slice(-3).join(" ");
-        reject(new Error(detail || "yt-dlp failed"));
+        const lines = String(stderr || error.message || "").trim().split(/\r?\n/).filter(Boolean);
+        const detail = lines.slice(-8).join(" ") || error.message || "yt-dlp failed";
+        log("yt-dlp failed:", detail);
+        reject(new Error(detail));
         return;
       }
       resolve(String(stdout || "").trim());
@@ -641,7 +644,7 @@ async function handle(req, res) {
     }
     json(res, 404, { error: "not found" });
   } catch (error) {
-    log("request failed:", error.message);
+    log("request failed:", method, route, error.message);
     json(res, 500, { error: error.message || "sidecar error" });
   }
 }

@@ -1,8 +1,8 @@
 # YouTubePanel sidecar installer
 
-Status: v0.5.0 (2026-10-22)
-Product: `YouTubePanel-Setup-0.5.0.exe` (offline) and
-`YouTubePanel-Setup-0.5.0-slim.exe` (2.8 MB downloader)
+Status: v0.5.1 (2026-10-22)
+Product: `YouTubePanel-Setup-0.5.1.exe` (offline) and
+`YouTubePanel-Setup-0.5.1-slim.exe` (2.8 MB downloader)
 Plugin: sidecar build restored from `youtubepanel-sidecar-v0.1.1`
 Sidecar: `tools/youtube-sidecar/`
 
@@ -10,7 +10,10 @@ Sidecar: `tools/youtube-sidecar/`
 
 One per-user Windows installer for the sidecar build:
 
-- Installs to `%LOCALAPPDATA%\YouTubePanel` (no admin).
+- Probes `%LOCALAPPDATA%\YouTubePanel` before installing.
+- Falls back to `C:\Users\Public\YouTubePanel` when LocalAppData is a
+  junction, a OneDrive/cloud path, or not writable. No admin/UAC prompt.
+- Refuses unsafe paths instead of installing into a folder Windows 448 blocks.
 - Offline build bundles Node, yt-dlp, mpv and the sidecar JS.
 - Slim build downloads Node, yt-dlp and mpv once during setup, checks pinned
   SHA-256 values, then installs the same layout.
@@ -44,7 +47,6 @@ One per-user Windows installer for the sidecar build:
   licenses\
   runtime\node.exe
   bin\mpv.exe
-  bin\d3dcompiler_43.dll   when present
   bin\yt-dlp.exe
 ```
 
@@ -61,7 +63,7 @@ Requirements on the build machine:
 Run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Version 0.5.0
+powershell -ExecutionPolicy Bypass -File installer\build.ps1 -Version 0.5.1
 ```
 
 Optional overrides:
@@ -72,15 +74,15 @@ Optional overrides:
 -YtDlpPath "C:\path\yt-dlp.exe"
 ```
 
-Output: `installer\output\YouTubePanel-Setup-0.5.0.exe`.
+Output: `installer\output\YouTubePanel-Setup-0.5.1.exe`.
 
 ### 3.1 Slim build
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\slim\build-slim.ps1 -Version 0.5.0
+powershell -ExecutionPolicy Bypass -File installer\slim\build-slim.ps1 -Version 0.5.1
 ```
 
-Output: `installer\output\YouTubePanel-Setup-0.5.0-slim.exe`.
+Output: `installer\output\YouTubePanel-Setup-0.5.1-slim.exe`.
 
 The slim installer downloads:
 
@@ -98,7 +100,11 @@ committed.
 
 ## 4. Install flow
 
-1. Inno Setup verifies that `%APPDATA%\BetterDiscord\plugins` exists.
+1. Inno Setup chooses the first safe install folder:
+   `%LOCALAPPDATA%\YouTubePanel`, then `C:\Users\Public\YouTubePanel`.
+   A folder is rejected if it is a reparse point, under OneDrive, or fails a
+   write probe. `UsePreviousAppDir=no` prevents an old path from overriding
+   this choice.
 2. Stops an older sidecar and backs up the old plugin.
 3. Extracts runtime/binaries and copies the plugin.
 4. Merges the sidecar URL/token into the plugin config.
@@ -120,14 +126,15 @@ after installation.
 
 ## 6. Validation
 
-Tested locally on 2026-10-22:
+Tested locally on 2026-10-22 (v0.5.1):
 
 - Installer exit code 0 with `/VERYSILENT`; no admin.
 - Installed tree present under `%LOCALAPPDATA%\YouTubePanel`.
 - `/health` returned `mpv: true`, yt-dlp `2026.10.21`, port 8910.
-- Destroy Lonely - MONSTER played through the bundled sidecar and stopped.
+- Destroy Lonely - MONSTER played through the bundled sidecar and stopped
+  after the yt-dlp `--ignore-config --no-cache-dir` change.
 - Plugin copied to `%APPDATA%\BetterDiscord\plugins\YouTubePanel.plugin.js`,
-  header `@version 0.5.0`.
+  header `@version 0.5.1`.
 - Config merge kept `musicChannelId`, removed `youtubeCookie` and
   `audioSource`, added `sidecarUrl`/`sidecarToken`, and set
   `"YouTubePanel": true` in `data/ptb/plugins.json`.
@@ -137,9 +144,17 @@ Tested locally on 2026-10-22:
 - Uninstall removed the install tree, plugin, Run key, and `:8910` listener;
   `YouTubePanel.config.json` remained.
 - Reinstall after uninstall succeeded and restored health.
+- Simulated untrusted mount point: a junction at
+  `%LOCALAPPDATA%\YouTubePanel` was rejected; setup automatically installed
+  to `C:\Users\Public\YouTubePanel`, `/health` returned true, and MONSTER
+  played. Uninstall removed the fallback install and Run key.
+- Restored the normal LocalAppData path and reinstalled 0.5.1; `/health`
+  returned true with no UAC prompt.
 - Slim installer: 2.8 MB output, silent install exit 0, downloaded and
   verified all three payloads, and installed `node v24.19.0`,
   `mpv v0.41.0-1227-ge471496c5`, and `yt-dlp 2026.10.21`.
+- Offline installer is 71.1 MB after dropping `d3dcompiler_43.dll`; audio
+  playback was rechecked without the DLL.
 - Slim `/health` returned `mpv: true`; MONSTER played with position and
   duration 160.
 
@@ -157,6 +172,10 @@ Still required before calling it distribution-ready:
 - Unsigned installer will trigger SmartScreen on other machines.
 - The offline installer bundles ~246 MB of runtime (about 72 MB compressed).
   The slim installer is 2.8 MB but downloads ~82 MB during setup.
+- No machine-wide or UAC install mode. If both LocalAppData and Public fail,
+  setup stops with an explicit path error.
+- `d3dcompiler_43.dll` is not bundled; audio-only playback was verified
+  without it. Keep the DLL if video output is added later.
 - yt-dlp updates are not automatic; rebuild or update the bundled exe.
 - mpv/yt-dlp licensing must be respected when redistributing.
 - BetterDiscord guidelines do not allow this sidecar design in the official

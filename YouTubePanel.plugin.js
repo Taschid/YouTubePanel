@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
  * @description Docked YouTube / YouTube Music controller for Discord, driven by a local yt-dlp + mpv sidecar.
- * @version 0.5.0
+ * @version 0.5.1
  * @author jcode
  * @authorId 0
  */
@@ -359,7 +359,14 @@ class YouTubePanel {
       throw new Error("sidecar offline at " + base + " - start tools/youtube-sidecar/start-youtube-panel.cmd");
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ("sidecar HTTP " + res.status));
+    if (!res.ok) {
+      const message = String(data.error || ("sidecar HTTP " + res.status));
+      this.log("sidecar " + path + " failed (" + res.status + "): " + message);
+      if (/448|untrusted mount point/i.test(message)) {
+        throw new Error("Windows error 448: this path is not trusted. Reinstall YouTubePanel in a normal local folder, for example C:\\Users\\Public\\YouTubePanel.");
+      }
+      throw new Error(message);
+    }
     return data;
   }
 

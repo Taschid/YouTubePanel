@@ -195,6 +195,14 @@ global.fetch = baseFetch;
   assert(offline && /sidecar offline/.test(offline.message), "offline sidecar has a clear error");
   global.fetch = goodFetch;
 
+  // 448 gets an actionable path message instead of a bare Windows code
+  global.fetch = async () => json({ error: "The path cannot be traversed because it contains an untrusted mount point (448)." }, 500);
+  let blocked = null;
+  try { await sp.play({ url: track.url }); } catch (e) { blocked = e; }
+  assert(blocked && /Windows error 448/.test(blocked.message), "448 is explained");
+  assert(blocked && /Users\\Public/.test(blocked.message), "448 points at a safe local folder");
+  global.fetch = goodFetch;
+
   // ---------------------------------------------------------- bot commands
   sp.settings.musicChannelId = "123456789";
   sp.settings.musicBotId = "jockie";

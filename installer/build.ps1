@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.5.0",
+  [string]$Version = "0.5.1",
   [string]$NodePath = "C:\Program Files\nodejs\node.exe",
   [string]$MpvPath = "C:\Program Files\MPV Player\mpv.exe",
   [string]$YtDlpPath = "",
@@ -28,8 +28,6 @@ Copy-Item (Join-Path $repo "tools\youtube-sidecar\lib.js") $payload -Force
 Copy-Item (Join-Path $PSScriptRoot "payload\*") $payload -Recurse -Force
 Copy-Item $NodePath (Join-Path $runtime "node.exe") -Force
 Copy-Item $MpvPath (Join-Path $bin "mpv.exe") -Force
-$d3d = Join-Path (Split-Path $MpvPath) "d3dcompiler_43.dll"
-if (Test-Path $d3d) { Copy-Item $d3d (Join-Path $bin "d3dcompiler_43.dll") -Force }
 
 $ytdlp = Join-Path $bin "yt-dlp.exe"
 if ($YtDlpPath) {

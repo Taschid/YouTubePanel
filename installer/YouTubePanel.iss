@@ -9,7 +9,8 @@ AppId={{2CC6D5C1-3D4C-4419-B23C-32983278F660}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={localappdata}\YouTubePanel
+DefaultDirName={code:GetChosenInstallDir}
+UsePreviousAppDir=no
 DefaultGroupName=YouTubePanel
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -48,14 +49,131 @@ Type: files; Name: "{app}\sidecar.log"
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+var
+  ChosenInstallDir: String;
+
+function GetFileAttributesW(lpFileName: String): Cardinal;
+external 'GetFileAttributesW@kernel32.dll stdcall';
+
+function StartsWithText(const Value, Prefix: String): Boolean;
+begin
+  Result := CompareText(Copy(Value, 1, Length(Prefix)), Prefix) = 0;
+end;
+
+function IsOneDrivePath(Path: String): Boolean;
+var
+  Base: String;
+begin
+  Result := False;
+  Base := GetEnv('OneDrive');
+  if (Base <> '') and (CompareText(Path, Base) = 0) then Result := True;
+  if (Base <> '') and StartsWithText(Path, AddBackslash(Base)) then Result := True;
+  Base := GetEnv('OneDriveConsumer');
+  if (Base <> '') and (CompareText(Path, Base) = 0) then Result := True;
+  if (Base <> '') and StartsWithText(Path, AddBackslash(Base)) then Result := True;
+  Base := GetEnv('OneDriveCommercial');
+  if (Base <> '') and (CompareText(Path, Base) = 0) then Result := True;
+  if (Base <> '') and StartsWithText(Path, AddBackslash(Base)) then Result := True;
+end;
+
+function PathHasReparsePoint(Path: String): Boolean;
+var
+  Current: String;
+  Attr: Cardinal;
+begin
+  Result := False;
+  Current := Path;
+  while Length(Current) >= 3 do
+  begin
+    Attr := GetFileAttributesW(Current);
+    if (Attr <> $FFFFFFFF) and ((Attr and FILE_ATTRIBUTE_REPARSE_POINT) <> 0) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    if Length(Current) = 3 then Break;
+    Current := ExtractFileDir(Current);
+  end;
+end;
+
+function CanUseInstallDir(Path: String): Boolean;
+var
+  Probe: String;
+  Ok: Boolean;
+begin
+  Result := False;
+  if Trim(Path) = '' then Exit;
+  if IsOneDrivePath(Path) then Exit;
+  if PathHasReparsePoint(Path) then Exit;
+  if not ForceDirectories(Path) then Exit;
+  Probe := AddBackslash(Path) + '.youtubepanel-write-test.tmp';
+  Ok := SaveStringToFile(Probe, 'ok', False);
+  if Ok then DeleteFile(Probe);
+  Result := Ok;
+end;
+
+function EnsureChosenInstallDir(): Boolean;
+begin
+  if ChosenInstallDir <> '' then
+  begin
+    Result := True;
+    Exit;
+  end;
+  ChosenInstallDir := ExpandConstant('{localappdata}\YouTubePanel');
+  if not CanUseInstallDir(ChosenInstallDir) then
+  begin
+    ChosenInstallDir := ExpandConstant('{sd}\Users\Public\YouTubePanel');
+    if not CanUseInstallDir(ChosenInstallDir) then
+    begin
+      ChosenInstallDir := '';
+      Result := False;
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+function GetChosenInstallDir(Param: String): String;
+begin
+  if ChosenInstallDir = '' then EnsureChosenInstallDir();
+  Result := ChosenInstallDir;
+end;
+
 function InitializeSetup(): Boolean;
 begin
+  Result := EnsureChosenInstallDir();
+  if not Result then
+  begin
+    MsgBox('YouTubePanel could not find a safe local install folder.' + #13#10 + #13#10 +
+      'Windows error 448 means a path contains an untrusted junction or cloud placeholder.' + #13#10 +
+      'Create a normal local folder and run setup again, for example:' + #13#10 +
+      'C:\Users\Public\YouTubePanel',
+      mbError, MB_OK);
+    Exit;
+  end;
   Result := DirExists(ExpandConstant('{userappdata}\BetterDiscord\plugins'));
   if not Result then
     MsgBox('BetterDiscord was not found.' + #13#10 + #13#10 +
       'Install and run BetterDiscord once, then run this setup again.' + #13#10 +
       'Expected folder: ' + ExpandConstant('{userappdata}\BetterDiscord\plugins'),
       mbError, MB_OK);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = wpSelectDir then
+  begin
+    if not CanUseInstallDir(WizardForm.DirEdit.Text) then
+    begin
+      MsgBox('That folder cannot be used.' + #13#10 + #13#10 +
+        'It is a junction, a OneDrive/cloud path, or it is not writable.' + #13#10 +
+        'Choose a normal local folder, for example:' + #13#10 +
+        'C:\Users\Public\YouTubePanel',
+        mbError, MB_OK);
+      Result := False;
+    end;
+  end;
 end;
 
 procedure StopOldSidecar();
@@ -86,6 +204,8 @@ var
 begin
   if CurStep = ssInstall then
   begin
+    if not CanUseInstallDir(ExpandConstant('{app}')) then
+      RaiseException('YouTubePanel cannot install to this folder because it is a junction, a OneDrive/cloud path, or it is not writable. Choose a normal local folder such as C:\Users\Public\YouTubePanel.');
     StopOldSidecar();
     PluginPath := ExpandConstant('{userappdata}\BetterDiscord\plugins\YouTubePanel.plugin.js');
     if FileExists(PluginPath) then

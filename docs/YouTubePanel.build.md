@@ -1,6 +1,6 @@
 # YouTubePanel build log
 
-Status: v0.5.0 (2026-10-22), packaged sidecar build
+Status: v0.5.1 (2026-10-22), packaged sidecar build
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: `tools/youtube-sidecar/`
 Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`
@@ -83,10 +83,10 @@ Node sidecar.
   downloads Node/mpv/yt-dlp with pinned SHA-256 values; silent install,
   health, and MONSTER playback verified.
 - `node --check` clean for plugin, sidecar and lib.
-- **50 lifecycle assertions**: metadata normalization, hyphenated titles, queue
+- **52 lifecycle assertions**: metadata normalization, hyphenated titles, queue
   next/previous/repeat/shuffle/remove, sidecar URL/method/body/token mapping,
-  offline error, bot URL/query/prefix/raw/skip, missing channel/track/disabled
-  play, BD settings, coexistence.
+  offline error, 448 path guidance, bot URL/query/prefix/raw/skip, missing
+  channel/track/disabled play, BD settings, coexistence.
 - **Headless Chrome real-React smoke**: panel mounted; title and times rendered;
   right-click bot sheet sent `m!skip`; search returned 2 rows; clicking a result
   sent `/play` for the right URL; settings showed 4 bot presets and the URL
@@ -96,6 +96,12 @@ Node sidecar.
   `stop` all changed state as expected. mpv 0.41.0, yt-dlp 2026.08.19.
 - **CORS preflight**: `OPTIONS /play` from `https://discord.com` returns 204 with
   `Access-Control-Allow-Origin: *` and the token/content-type headers.
+- **v0.5.1 installer path fallback**: a junction at
+  `%LOCALAPPDATA%\YouTubePanel` was rejected and setup installed to
+  `C:\Users\Public\YouTubePanel`; `/health` returned true and MONSTER played.
+  The normal LocalAppData path also installs without UAC.
+- **v0.5.1 yt-dlp hardening**: calls now use `--ignore-config --no-cache-dir`
+  with a stable working directory; playback and `/health` still pass.
 
 ## 7. Known limitations
 
@@ -118,6 +124,8 @@ Node sidecar.
 
 ## 8. Version history
 
+- **0.5.1**: safe install-folder probe with Public fallback, no UAC; yt-dlp
+  config/cache isolation; 448 guidance in the panel.
 - **0.1.1**: hotkey moved from Alt+Y to Alt+Q (existing Alt+Y configs migrate
   on load), Spotify-matched artwork sizing, inside-panel left-edge guard, and
   startup mutual exclusion so right-column panels do not overlap.
