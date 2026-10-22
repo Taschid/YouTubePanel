@@ -1,6 +1,6 @@
 param(
-  [string]$Version = "0.5.1",
-  [string]$InnoCompiler = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+  [string]$Version = "0.5.3",
+  [string]$InnoCompiler = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,7 +9,44 @@ $build = Join-Path $PSScriptRoot "build"
 $payload = Join-Path $build "payload"
 $licenses = Join-Path $payload "licenses"
 
-if (-not (Test-Path $InnoCompiler)) { throw "Inno Setup compiler not found: $InnoCompiler" }
+function Resolve-Tool {
+  param(
+    [string]$Explicit,
+    [string]$Command,
+    [string]$Label,
+    [string[]]$Candidates
+  )
+  if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+    if (-not (Test-Path -LiteralPath $Explicit -PathType Leaf)) {
+      throw ($Label + " not found at the explicit path: " + $Explicit)
+    }
+    return (Resolve-Path -LiteralPath $Explicit).Path
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($Command)) {
+    $found = Get-Command $Command -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found -and $found.Source -and (Test-Path -LiteralPath $found.Source -PathType Leaf)) {
+      return $found.Source
+    }
+  }
+
+  foreach ($candidate in $Candidates) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      return (Resolve-Path -LiteralPath $candidate).Path
+    }
+  }
+
+  throw ($Label + " was not found. Pass -InnoCompiler or add ISCC.exe to PATH.")
+}
+
+$InnoCompiler = Resolve-Tool -Explicit $InnoCompiler -Command "ISCC.exe" -Label "InnoCompiler" -Candidates @(
+  (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+  (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+  $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe" } else { "" })
+)
+
+Write-Output ("Using ISCC: " + $InnoCompiler)
 
 Remove-Item $build -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $payload, $licenses -Force | Out-Null
@@ -19,6 +56,8 @@ Copy-Item (Join-Path $repo "tools\youtube-sidecar\sidecar.js") $payload -Force
 Copy-Item (Join-Path $repo "tools\youtube-sidecar\lib.js") $payload -Force
 Copy-Item (Join-Path $PSScriptRoot "..\payload\*") $payload -Recurse -Force
 
+# The installer selects a free port in 8910-8999 at install time. This is only
+# the packaged default used before the first launch.
 $config = [ordered]@{
   port = 8910
   token = "youtube-panel"
@@ -56,6 +95,6 @@ finally {
 }
 
 $output = Join-Path $PSScriptRoot "..\output\YouTubePanel-Setup-$Version-slim.exe"
-if (-not (Test-Path $output)) { throw "Installer output not found: $output" }
+if (-not (Test-Path -LiteralPath $output)) { throw "Installer output not found: $output" }
 Write-Output ("Built: " + (Resolve-Path $output))
-Write-Output ("Size:  " + [math]::Round((Get-Item $output).Length / 1MB, 1) + " MB")
+Write-Output ("Size:  " + [math]::Round((Get-Item -LiteralPath $output).Length / 1MB, 1) + " MB")

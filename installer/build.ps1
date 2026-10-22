@@ -1,10 +1,10 @@
 param(
-  [string]$Version = "0.5.1",
-  [string]$NodePath = "C:\Program Files\nodejs\node.exe",
-  [string]$MpvPath = "C:\Program Files\MPV Player\mpv.exe",
+  [string]$Version = "0.5.3",
+  [string]$NodePath = "",
+  [string]$MpvPath = "",
   [string]$YtDlpPath = "",
   [string]$YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
-  [string]$InnoCompiler = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+  [string]$InnoCompiler = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,9 +15,68 @@ $runtime = Join-Path $payload "runtime"
 $bin = Join-Path $payload "bin"
 $licenses = Join-Path $payload "licenses"
 
-if (-not (Test-Path $NodePath)) { throw "node.exe not found: $NodePath" }
-if (-not (Test-Path $MpvPath)) { throw "mpv.exe not found: $MpvPath" }
-if (-not (Test-Path $InnoCompiler)) { throw "Inno Setup compiler not found: $InnoCompiler" }
+function Resolve-Tool {
+  param(
+    [string]$Explicit,
+    [string]$Command,
+    [string]$Label,
+    [string[]]$Candidates
+  )
+  if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+    if (-not (Test-Path -LiteralPath $Explicit -PathType Leaf)) {
+      throw ($Label + " not found at the explicit path: " + $Explicit)
+    }
+    return (Resolve-Path -LiteralPath $Explicit).Path
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($Command)) {
+    $found = Get-Command $Command -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found -and $found.Source -and (Test-Path -LiteralPath $found.Source -PathType Leaf)) {
+      return $found.Source
+    }
+  }
+
+  foreach ($candidate in $Candidates) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      return (Resolve-Path -LiteralPath $candidate).Path
+    }
+  }
+
+  $searched = @()
+  if ($Command) { $searched += ("Get-Command " + $Command) }
+  $searched += $Candidates
+  throw ($Label + " was not found. Pass the matching script parameter explicitly or add " + $Command + " to PATH. Searched: " + ($searched -join "; "))
+}
+
+$NodePath = Resolve-Tool -Explicit $NodePath -Command "node.exe" -Label "Node" -Candidates @(
+  (Join-Path $env:ProgramFiles "nodejs\node.exe"),
+  $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "nodejs\node.exe" } else { "" }),
+  (Join-Path $env:LOCALAPPDATA "Programs\nodejs\node.exe"),
+  (Join-Path $env:LOCALAPPDATA "nvs\node.exe")
+)
+
+$MpvCandidates = @(
+  (Join-Path $env:ProgramFiles "MPV Player\mpv.exe"),
+  (Join-Path $env:ProgramFiles "mpv\mpv.exe"),
+  $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "MPV Player\mpv.exe" } else { "" }),
+  (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\mpv.exe"),
+  (Join-Path $env:LOCALAPPDATA "Programs\mpv\mpv.exe"),
+  (Join-Path $env:LOCALAPPDATA "YouTubePanel\bin\mpv.exe"),
+  $(if ($env:PUBLIC) { Join-Path $env:PUBLIC "YouTubePanel\bin\mpv.exe" } else { "" }),
+  (Join-Path $PSScriptRoot "build\payload\bin\mpv.exe")
+)
+$MpvPath = Resolve-Tool -Explicit $MpvPath -Command "mpv.exe" -Label "Mpv" -Candidates $MpvCandidates
+
+$InnoCompiler = Resolve-Tool -Explicit $InnoCompiler -Command "ISCC.exe" -Label "InnoCompiler" -Candidates @(
+  (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"),
+  (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+  $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe" } else { "" })
+)
+
+Write-Output ("Using Node:   " + $NodePath)
+Write-Output ("Using mpv:    " + $MpvPath)
+Write-Output ("Using ISCC:   " + $InnoCompiler)
 
 Remove-Item $build -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $payload, $runtime, $bin, $licenses -Force | Out-Null
@@ -30,17 +89,21 @@ Copy-Item $NodePath (Join-Path $runtime "node.exe") -Force
 Copy-Item $MpvPath (Join-Path $bin "mpv.exe") -Force
 
 $ytdlp = Join-Path $bin "yt-dlp.exe"
-if ($YtDlpPath) {
-  if (-not (Test-Path $YtDlpPath)) { throw "yt-dlp.exe not found: $YtDlpPath" }
-  Copy-Item $YtDlpPath $ytdlp -Force
+if (-not [string]::IsNullOrWhiteSpace($YtDlpPath)) {
+  if (-not (Test-Path -LiteralPath $YtDlpPath -PathType Leaf)) {
+    throw ("yt-dlp.exe not found at the explicit path: " + $YtDlpPath)
+  }
+  Copy-Item -LiteralPath $YtDlpPath -Destination $ytdlp -Force
 }
 else {
   Invoke-WebRequest -Uri $YtDlpUrl -OutFile $ytdlp -UseBasicParsing
 }
-if (-not (Test-Path $ytdlp) -or (Get-Item $ytdlp).Length -lt 1000000) {
+if (-not (Test-Path -LiteralPath $ytdlp) -or (Get-Item -LiteralPath $ytdlp).Length -lt 1000000) {
   throw "yt-dlp.exe download/copy failed"
 }
 
+# The installer selects a free port in 8910-8999 at install time. This is only
+# the packaged default used before the first launch.
 $config = [ordered]@{
   port = 8910
   token = "youtube-panel"
@@ -81,6 +144,6 @@ finally {
 }
 
 $output = Join-Path $PSScriptRoot "output\YouTubePanel-Setup-$Version.exe"
-if (-not (Test-Path $output)) { throw "Installer output not found: $output" }
+if (-not (Test-Path -LiteralPath $output)) { throw "Installer output not found: $output" }
 Write-Output ("Built: " + $output)
-Write-Output ("Size:  " + [math]::Round((Get-Item $output).Length / 1MB, 1) + " MB")
+Write-Output ("Size:  " + [math]::Round((Get-Item -LiteralPath $output).Length / 1MB, 1) + " MB")

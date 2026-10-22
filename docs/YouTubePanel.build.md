@@ -1,6 +1,6 @@
 # YouTubePanel build log
 
-Status: v0.5.1 (2026-10-22), packaged sidecar build
+Status: v0.5.3 (2026-10-22), packaged sidecar build
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: `tools/youtube-sidecar/`
 Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`
@@ -75,6 +75,11 @@ Node sidecar.
 
 ## 6. Validation (2026-10-22)
 
+- **0.5.3**: silent full and slim installs complete in ~15-20s with no
+  modal dialogs; dynamic port selection verified by occupying `8910` and
+  receiving `8911` with matching plugin URL; local and network selftests both
+  pass; uninstall removes the app, plugin, Run key, listener, and leaves no
+  PATH edits.
 - **Installer v0.5.0**: `YouTubePanel-Setup-0.5.0.exe` (72.4 MB) built with
   Inno Setup; bundled health returned mpv=true/yt-dlp 2026.10.21; MONSTER
   played; uninstall/reinstall and hidden auto-start path verified locally.
@@ -124,6 +129,9 @@ Node sidecar.
 
 ## 8. Version history
 
+- **0.5.3**: dynamic per-install port, sanitized Machine+User PATH, local and
+  network selftests, install-report.json, silent-safe install, direct
+  PowerShell Run key, all-root sidecar cleanup, no hardcoded user paths.
 - **0.5.1**: safe install-folder probe with Public fallback, no UAC; yt-dlp
   config/cache isolation; 448 guidance in the panel.
 - **0.1.1**: hotkey moved from Alt+Y to Alt+Q (existing Alt+Y configs migrate

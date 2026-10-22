@@ -44,6 +44,7 @@ function loadConfig() {
     else if (key === "--token") cfg.token = String(value);
     else if (key === "--mpv") cfg.mpvPath = String(value);
     else if (key === "--ytdlp") cfg.ytdlpPath = String(value);
+    else if (key === "--ffmpeg") cfg.ffmpegPath = String(value);
     i += 1;
   }
   cfg.port = Number(cfg.port) || DEFAULTS.port;
@@ -58,8 +59,8 @@ function findMpvPath(configured) {
   if (configured && configured !== "mpv") return configured;
   const candidates = [
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Microsoft", "WinGet", "Links", "mpv.exe"),
-    "C:\\Program Files\\MPV Player\\mpv.exe",
-    "C:\\Program Files\\mpv\\mpv.exe",
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, "MPV Player", "mpv.exe"),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, "mpv", "mpv.exe"),
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "mpv", "mpv.exe"),
   ].filter(Boolean);
   return candidates.find((candidate) => {
@@ -68,6 +69,160 @@ function findMpvPath(configured) {
 }
 
 const CONFIG = loadConfig();
+
+// ---------------------------------------------------------------------------
+// PATH hardening.
+//
+// yt-dlp probes every PATH entry looking for ffmpeg. A junction or mount point
+// in PATH (for example the Cua driver bin) makes Windows raise WinError 448
+// ("untrusted mount point") and aborts the whole call. We therefore build an
+// allowlist PATH once at startup: our own bin folders, the directory holding a
+// trusted ffmpeg, then the inherited PATH filtered down to real directories
+// that are not symlinks, junctions, or other reparse points.
+
+const PATH_REJECTED = [];
+const PATH_STATE = {
+  initial: "",
+  safe: "",
+  entries: [],
+  ffmpegDir: "",
+  ffmpegSource: "",
+};
+
+function stripQuotes(value) {
+  return String(value == null ? "" : value).trim().replace(/^"(.*)"$/, "$1").trim();
+}
+
+// Returns null when the entry is a usable, non-reparse directory, otherwise a
+// short reason string. Any lstat/stat failure (448, EACCES, EPERM, ENOENT, ...)
+// disqualifies the entry.
+function unsafeDirReason(entry) {
+  if (!entry) return "empty";
+  if (entry.includes('"')) return "invalid quotes";
+  try {
+    const lst = fs.lstatSync(entry);
+    if (lst.isSymbolicLink()) return "symlink/junction";
+    const st = fs.statSync(entry);
+    if (!st.isDirectory()) return "not a directory";
+    return null;
+  } catch (error) {
+    const message = String((error && error.message) || "");
+    const code = String((error && error.code) || "");
+    if (/448/.test(message) || /448/.test(code)) return "WinError 448 (untrusted mount point)";
+    return "stat failed" + (code ? ": " + code : "");
+  }
+}
+
+function sanitizePathEntries(entries, recordRejections) {
+  const out = [];
+  const seen = new Set();
+  const seenRejected = new Set(PATH_REJECTED.map((item) => item.entry.toLowerCase()));
+  for (const raw of entries) {
+    const entry = stripQuotes(raw);
+    if (!entry) continue;
+    let key;
+    try { key = path.resolve(entry).toLowerCase(); } catch { key = entry.toLowerCase(); }
+    if (seen.has(key)) continue;
+    const reason = unsafeDirReason(entry);
+    if (reason) {
+      if (recordRejections && !seenRejected.has(entry.toLowerCase())) {
+        seenRejected.add(entry.toLowerCase());
+        PATH_REJECTED.push({ entry, reason });
+      }
+      continue;
+    }
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
+function envPathEntries(value) {
+  return String(value || "").split(";").map((item) => stripQuotes(item)).filter(Boolean);
+}
+
+function ffmpegDirFrom(value) {
+  const candidate = stripQuotes(value);
+  if (!candidate) return "";
+  try {
+    const st = fs.statSync(candidate);
+    if (st.isDirectory()) {
+      return unsafeDirReason(candidate) ? "" : candidate;
+    }
+    if (st.isFile()) {
+      const dir = path.dirname(candidate);
+      return unsafeDirReason(dir) ? "" : dir;
+    }
+  } catch {}
+  return "";
+}
+
+// Checks config.ffmpegPath, then ROOT\bin\ffmpeg.exe, then the sanitized PATH.
+function resolveFfmpegDir(safeBaseEntries) {
+  const configured = CONFIG.ffmpegPath;
+  if (configured) {
+    const dir = ffmpegDirFrom(configured);
+    if (dir) return { dir, source: "config.ffmpegPath (" + configured + ")" };
+  }
+  const bundled = path.join(ROOT, "bin", "ffmpeg.exe");
+  const bundledDir = ffmpegDirFrom(bundled);
+  if (bundledDir) return { dir: bundledDir, source: "bundled " + bundled };
+  for (const entry of safeBaseEntries) {
+    try {
+      if (fs.statSync(path.join(entry, "ffmpeg.exe")).isFile()) {
+        return { dir: entry, source: "PATH entry " + entry };
+      }
+    } catch {}
+  }
+  return { dir: "", source: "not found" };
+}
+
+function initializePath() {
+  const inherited = String(process.env.PATH || "");
+  const inheritedEntries = envPathEntries(inherited);
+  const base = sanitizePathEntries(
+    [path.join(ROOT, "bin"), path.join(ROOT, "runtime"), ...inheritedEntries],
+    true
+  );
+  const ffmpeg = resolveFfmpegDir(base);
+  const finalEntries = sanitizePathEntries(
+    [path.join(ROOT, "bin"), path.join(ROOT, "runtime"), ffmpeg.dir, ...inheritedEntries],
+    false
+  );
+  PATH_STATE.initial = inherited;
+  PATH_STATE.entries = finalEntries;
+  PATH_STATE.safe = finalEntries.join(";");
+  PATH_STATE.ffmpegDir = ffmpeg.dir;
+  PATH_STATE.ffmpegSource = ffmpeg.source;
+  process.env.PATH = PATH_STATE.safe;
+  return PATH_STATE;
+}
+
+initializePath();
+
+// Build a child env whose PATH is exactly the value we want, regardless of how
+// the inherited environment capitalised the key.
+function childEnv(pathValue) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH") delete env[key];
+  }
+  env.PATH = pathValue;
+  return env;
+}
+
+// Last-resort PATH for the 448 retry: only our own folders and the Windows
+// directories, no user-installed tooling.
+function minimalYtdlpPath() {
+  const systemRoot = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+  return [
+    path.join(ROOT, "bin"),
+    path.join(ROOT, "runtime"),
+    path.join(systemRoot, "System32"),
+    systemRoot,
+  ].join(";");
+}
+
 const queue = new Queue();
 let currentTrack = null;
 let mpv = null;
@@ -94,24 +249,117 @@ function log(...args) {
   } catch {}
 }
 
-function runYtdlp(args, timeoutMs) {
+// ---------------------------------------------------------------------------
+// yt-dlp execution.
+
+function ytdlpArgList(args, includeFfmpeg) {
+  const list = ["--ignore-config", "--no-cache-dir"];
+  if (includeFfmpeg && PATH_STATE.ffmpegDir) {
+    list.push("--ffmpeg-location", PATH_STATE.ffmpegDir);
+  }
+  return list.concat(args);
+}
+
+function truncate(value, max) {
+  const text = String(value == null ? "" : value);
+  return text.length > max ? text.slice(0, max) + "... (truncated)" : text;
+}
+
+function ytdlpStderrLines(error) {
+  const stderr = String((error && error.stderr) || "");
+  const message = String((error && error.message) || "");
+  const source = stderr.trim() ? stderr : message;
+  return source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function isUntrustedMountError(text) {
+  return /WinError\s*448|untrusted mount point/i.test(String(text || ""));
+}
+
+function execYtdlp(args, timeoutMs, pathValue, includeFfmpeg) {
   return new Promise((resolve, reject) => {
-    execFile(CONFIG.ytdlpPath, ["--ignore-config", "--no-cache-dir", ...args], {
+    const finalArgs = ytdlpArgList(args, includeFfmpeg);
+    const commandLine = CONFIG.ytdlpPath + " " + finalArgs.join(" ");
+    execFile(CONFIG.ytdlpPath, finalArgs, {
       windowsHide: true,
       cwd: ROOT,
       timeout: timeoutMs || 60000,
       maxBuffer: 64 * 1024 * 1024,
+      env: childEnv(pathValue),
     }, (error, stdout, stderr) => {
       if (error) {
-        const lines = String(stderr || error.message || "").trim().split(/\r?\n/).filter(Boolean);
-        const detail = lines.slice(-8).join(" ") || error.message || "yt-dlp failed";
-        log("yt-dlp failed:", detail);
-        reject(new Error(detail));
+        const lines = ytdlpStderrLines({ stderr, message: error.message });
+        error.ytdlpLines = lines;
+        error.ytdlpDetail = lines.slice(-8).join(" ") || error.message || "yt-dlp failed";
+        error.ytdlpCommand = commandLine;
+        reject(error);
         return;
       }
       resolve(String(stdout || "").trim());
     });
   });
+}
+
+// Points at the PATH entry most likely responsible for a 448: one we rejected
+// at startup and that appears in the yt-dlp output, else the first rejected
+// reparse point / blocked entry from the startup log.
+function findLikelyPathOffender(text) {
+  const haystack = String(text || "");
+  const lower = haystack.toLowerCase();
+  for (const item of PATH_REJECTED) {
+    if (item.entry && lower.includes(item.entry.toLowerCase())) {
+      return item.entry + " (" + item.reason + ")";
+    }
+  }
+  const blocked = PATH_REJECTED.filter((item) =>
+    /448|untrusted|symlink|junction|EPERM|EACCES/i.test(item.reason));
+  if (blocked.length) return blocked[0].entry + " (" + blocked[0].reason + ")";
+  const quoted = haystack.match(/[A-Za-z]:\\[^\r\n'"]+/g) || [];
+  if (quoted.length) return quoted[0].trim();
+  return "";
+}
+
+function ytdlpFailure(error, firstError) {
+  const detail = error.ytdlpDetail || error.message || "yt-dlp failed";
+  const lines = Array.isArray(error.ytdlpLines) ? error.ytdlpLines : [];
+  log("yt-dlp failed: " + truncate(error.ytdlpCommand || "(unknown command)", 4000));
+  for (const line of lines.slice(-8)) log("  stderr: " + line);
+  if (firstError) {
+    log("yt-dlp first attempt failed: " + truncate(firstError.ytdlpDetail || firstError.message, 2000));
+  }
+  const combined = [
+    detail,
+    lines.slice(-8).join("\n"),
+    firstError ? (firstError.ytdlpDetail || firstError.message || "") : "",
+  ].join("\n");
+  if (isUntrustedMountError(combined)) {
+    const offender = findLikelyPathOffender(combined);
+    const where = offender ? "Likely blocked PATH entry: " + offender + ". " : "";
+    return new Error(
+      "WinError 448 (untrusted mount point): Windows blocked traversal of a PATH entry. " +
+      where + "Restart the sidecar; see sidecar.log for the sanitized PATH and the failing command."
+    );
+  }
+  return new Error(detail);
+}
+
+async function runYtdlp(args, timeoutMs) {
+  try {
+    return await execYtdlp(args, timeoutMs, PATH_STATE.safe, true);
+  } catch (error) {
+    if (!isUntrustedMountError(error.ytdlpDetail || error.message)) {
+      throw ytdlpFailure(error);
+    }
+    log("yt-dlp hit WinError 448 with sanitized PATH; retrying once with minimal PATH and no --ffmpeg-location");
+    log("yt-dlp retry minimal PATH=" + minimalYtdlpPath());
+    try {
+      const out = await execYtdlp(args, timeoutMs, minimalYtdlpPath(), false);
+      log("yt-dlp 448 retry succeeded");
+      return out;
+    } catch (retryError) {
+      throw ytdlpFailure(retryError, error);
+    }
+  }
 }
 
 async function readVersion() {
@@ -443,6 +691,265 @@ async function state() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Install-time self test.
+//
+// Two independent checks:
+//
+//   mode=local   mpv + audio device only. Generates a short silent PCM WAV in
+//                os.tmpdir(), loads it in mpv at volume 0, waits for time-pos
+//                to advance, then stops and deletes the temp file. No network
+//                and no yt-dlp. This is the hard install check.
+//
+//   mode=network yt-dlp -> mpv. Resolves the configured test video with
+//                `yt-dlp -g -f bestaudio/best`, loads it in mpv at volume 0,
+//                and waits for time-pos to advance.
+//
+//   no mode      auto: network first, local fallback. `mode` names the check
+//                that passed and `fallback` says whether network failed.
+//
+// Either check briefly interrupts whatever is playing; this is install-time
+// only. Both stop mpv and restore the previous volume when done.
+
+const SELFTEST_VIDEO_IDS = Array.from(new Set([
+  CONFIG.selftestVideoId,
+  "9vdgd4F9CuI",
+  "jNQXAC9IVRw",
+].filter((value) => typeof value === "string" && /^[\w-]{6,}$/.test(value))));
+const SELFTEST_TIMEOUT_MS = 20000;
+const SELFTEST_NETWORK_ATTEMPTS = 2;
+const SELFTEST_LOCAL_ATTEMPTS = 1;
+const SELFTEST_LOCAL_POLL_MS = 250;
+const SELFTEST_NETWORK_POLL_MS = 500;
+const SELFTEST_WAV_SECONDS = 4;
+const SELFTEST_WAV_RATE = 8000;
+const SELFTEST_CONTRACT =
+  "mode=local: mpv/audio only via a silent temp WAV (no network, no yt-dlp); " +
+  "mode=network: yt-dlp resolve plus mpv playback; " +
+  "no mode: auto, network first with local fallback, and mode names the check that passed";
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 16-bit mono PCM WAV of pure silence. mpv decodes PCM WAV internally, so this
+// works even when the bundled ffmpeg is the thing under test.
+function writeSilentWav(filePath, seconds) {
+  const channels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = channels * (bitsPerSample / 8);
+  const byteRate = SELFTEST_WAV_RATE * blockAlign;
+  const dataSize = Math.max(1, Math.round(SELFTEST_WAV_RATE * seconds)) * blockAlign;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0, 4, "ascii");
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8, 4, "ascii");
+  buffer.write("fmt ", 12, 4, "ascii");
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20); // PCM
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(SELFTEST_WAV_RATE, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36, 4, "ascii");
+  buffer.writeUInt32LE(dataSize, 40);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+// mpv can keep the file handle briefly after "stop", so retry the unlink.
+async function removeTempFile(filePath) {
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    try {
+      fs.unlinkSync(filePath);
+      log("selftest local: removed temp " + filePath);
+      return true;
+    } catch (error) {
+      if (error && error.code === "ENOENT") {
+        log("selftest local: temp already gone " + filePath);
+        return true;
+      }
+      if (attempt === 10) {
+        log("selftest local: could not remove temp " + filePath + ": " + (error && error.message ? error.message : String(error)));
+        return false;
+      }
+      await sleep(100);
+    }
+  }
+  return false;
+}
+
+// Poll time-pos until it advances or the deadline passes.
+async function waitForTimePos(client, deadline, pollMs) {
+  let position = 0;
+  let duration = 0;
+  let previousPosition = null;
+  let advanced = false;
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    const pos = await client.get("time-pos");
+    const dur = await client.get("duration");
+    if (typeof dur === "number" && dur > 0) duration = dur;
+    if (typeof pos === "number" && pos >= 0) {
+      position = pos;
+      if (previousPosition !== null && pos > previousPosition + 0.02) {
+        advanced = true;
+        break;
+      }
+      previousPosition = pos;
+    }
+  }
+  return { position, duration, advanced };
+}
+
+async function stopSelftestPlayback(previousVolume, label) {
+  if (!mpv) return;
+  try { await mpv.command(["stop"]); } catch (error) { log("selftest " + label + ": stop failed: " + error.message); }
+  try { await mpv.set("volume", previousVolume); } catch (error) { log("selftest " + label + ": volume restore failed: " + error.message); }
+}
+
+async function runLocalSelftestOnce() {
+  const startedAt = Date.now();
+  const wavPath = path.join(os.tmpdir(), "youtube-panel-selftest-" + process.pid + "-" + startedAt + ".wav");
+  log("selftest local: start temp=" + wavPath);
+  const previousVolume = volume;
+  let touchedPlayback = false;
+  try {
+    writeSilentWav(wavPath, SELFTEST_WAV_SECONDS);
+    if (!mpv) mpv = new MpvClient();
+    await mpv.start();
+    await mpv.set("volume", 0);
+    touchedPlayback = true;
+    await mpv.load(wavPath);
+    const result = await waitForTimePos(mpv, Date.now() + SELFTEST_TIMEOUT_MS, SELFTEST_LOCAL_POLL_MS);
+    if (!result.advanced) {
+      throw new Error("mpv loaded the silent WAV but time-pos did not advance within " +
+        (SELFTEST_TIMEOUT_MS / 1000) + "s");
+    }
+    const elapsedMs = Date.now() - startedAt;
+    log("selftest local: pass temp=" + wavPath +
+      " position=" + result.position.toFixed(2) +
+      " duration=" + result.duration.toFixed(2) +
+      " elapsedMs=" + elapsedMs);
+    return { ok: true, mode: "local", duration: result.duration, elapsedMs };
+  } catch (error) {
+    log("selftest local: fail temp=" + wavPath +
+      " elapsedMs=" + (Date.now() - startedAt) +
+      ": " + (error && error.message ? error.message : String(error)));
+    throw error;
+  } finally {
+    if (touchedPlayback) await stopSelftestPlayback(previousVolume, "local");
+    await removeTempFile(wavPath);
+    currentTrack = null;
+    pausedPosition = 0;
+    isPaused = false;
+  }
+}
+
+async function runNetworkSelftestOnce(videoId) {
+  const startedAt = Date.now();
+  log("selftest network: start (" + videoId + ")");
+  const previousVolume = volume;
+  let touchedPlayback = false;
+  try {
+    const stream = await getStreamUrl({
+      videoId,
+      url: "https://www.youtube.com/watch?v=" + videoId,
+    });
+    if (!/^https?:\/\//i.test(stream)) throw new Error("yt-dlp did not return a usable stream URL");
+    log("selftest network: stream URL resolved (" + videoId + ")");
+    if (!mpv) mpv = new MpvClient();
+    await mpv.start();
+    await mpv.set("volume", 0);
+    touchedPlayback = true;
+    await mpv.load(stream);
+    const result = await waitForTimePos(mpv, Date.now() + SELFTEST_TIMEOUT_MS, SELFTEST_NETWORK_POLL_MS);
+    if (!result.advanced) {
+      throw new Error("mpv loaded the test stream but time-pos did not advance within " +
+        (SELFTEST_TIMEOUT_MS / 1000) + "s");
+    }
+    const elapsedMs = Date.now() - startedAt;
+    log("selftest network: pass videoId=" + videoId +
+      " position=" + result.position.toFixed(2) +
+      " duration=" + result.duration.toFixed(1) +
+      " elapsedMs=" + elapsedMs);
+    return { ok: true, mode: "network", videoId, position: result.position, duration: result.duration, elapsedMs };
+  } catch (error) {
+    log("selftest network: fail videoId=" + videoId +
+      " elapsedMs=" + (Date.now() - startedAt) +
+      ": " + (error && error.message ? error.message : String(error)));
+    throw error;
+  } finally {
+    if (touchedPlayback) await stopSelftestPlayback(previousVolume, "network");
+    currentTrack = null;
+    pausedPosition = 0;
+    isPaused = false;
+  }
+}
+
+async function runLocalSelftest() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= SELFTEST_LOCAL_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await runLocalSelftestOnce();
+      return { ...result, attempts: attempt, contract: SELFTEST_CONTRACT };
+    } catch (error) {
+      lastError = error;
+      log("selftest local: attempt " + attempt + "/" + SELFTEST_LOCAL_ATTEMPTS + " failed: " +
+        (error && error.message ? error.message : String(error)));
+      if (attempt < SELFTEST_LOCAL_ATTEMPTS) await sleep(1000);
+    }
+  }
+  throw lastError || new Error("local selftest failed");
+}
+
+async function runNetworkSelftest() {
+  let lastError = null;
+  for (const videoId of SELFTEST_VIDEO_IDS) {
+    for (let attempt = 1; attempt <= SELFTEST_NETWORK_ATTEMPTS; attempt += 1) {
+      try {
+        const result = await runNetworkSelftestOnce(videoId);
+        return { ...result, attempts: attempt, contract: SELFTEST_CONTRACT };
+      } catch (error) {
+        lastError = error;
+        log("selftest network: attempt " + attempt + "/" + SELFTEST_NETWORK_ATTEMPTS +
+          " failed for " + videoId + ": " + (error && error.message ? error.message : String(error)));
+        if (attempt < SELFTEST_NETWORK_ATTEMPTS) await sleep(1000);
+      }
+    }
+  }
+  throw lastError || new Error("network selftest failed for all configured test videos");
+}
+
+async function runSelftest(mode) {
+  if (mode === "local") return runLocalSelftest();
+  if (mode === "network") return runNetworkSelftest();
+  let networkError = null;
+  try {
+    const result = await runNetworkSelftest();
+    return { ...result, fallback: false };
+  } catch (error) {
+    networkError = error;
+    log("selftest auto: network check failed, falling back to local: " +
+      (error && error.message ? error.message : String(error)));
+  }
+  try {
+    const result = await runLocalSelftest();
+    return {
+      ...result,
+      fallback: true,
+      networkError: networkError && networkError.message ? networkError.message : String(networkError),
+    };
+  } catch (error) {
+    throw new Error(
+      "network selftest failed (" +
+      (networkError && networkError.message ? networkError.message : String(networkError)) +
+      "); local selftest failed (" + (error && error.message ? error.message : String(error)) + ")"
+    );
+  }
+}
+
 function json(res, status, payload) {
   const headers = {
     "Access-Control-Allow-Origin": "*",
@@ -510,6 +1017,20 @@ async function handle(req, res) {
         ytdlp: ytdlpVersion,
         port: CONFIG.port,
       });
+      return;
+    }
+    if (method === "GET" && route === "/selftest") {
+      const requested = String(url.searchParams.get("mode") || "").trim().toLowerCase();
+      const mode = requested || "auto";
+      if (!["auto", "local", "network"].includes(mode)) {
+        json(res, 400, {
+          ok: false,
+          error: "invalid selftest mode: " + requested + " (use local, network, or omit mode for auto)",
+        });
+        return;
+      }
+      log("selftest: requested mode=" + mode);
+      json(res, 200, await runSelftest(mode));
       return;
     }
     if (method === "GET" && route === "/search") {
@@ -661,6 +1182,11 @@ server.on("error", (error) => {
 server.listen(CONFIG.port, "127.0.0.1", async () => {
   log("listening on http://127.0.0.1:" + CONFIG.port);
   log("token=" + CONFIG.token + "  mpv=" + CONFIG.mpvPath + "  yt-dlp=" + CONFIG.ytdlpPath);
+  log("PATH=" + PATH_STATE.safe);
+  log("ffmpeg=" + (PATH_STATE.ffmpegDir || "not found") + " (" + PATH_STATE.ffmpegSource + ")");
+  for (const item of PATH_REJECTED) {
+    log("PATH rejected: " + item.entry + " (" + item.reason + ")");
+  }
   await readVersion();
   log("yt-dlp=" + ytdlpVersion);
   if (!mpv) mpv = new MpvClient();

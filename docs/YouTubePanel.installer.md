@@ -1,8 +1,8 @@
 # YouTubePanel sidecar installer
 
-Status: v0.5.1 (2026-10-22)
-Product: `YouTubePanel-Setup-0.5.1.exe` (offline) and
-`YouTubePanel-Setup-0.5.1-slim.exe` (2.8 MB downloader)
+Status: v0.5.3 (2026-10-22)
+Product: `YouTubePanel-Setup-0.5.3.exe` (offline) and
+`YouTubePanel-Setup-0.5.3-slim.exe` (2.8 MB downloader)
 Plugin: sidecar build restored from `youtubepanel-sidecar-v0.1.1`
 Sidecar: `tools/youtube-sidecar/`
 
@@ -31,6 +31,24 @@ One per-user Windows installer for the sidecar build:
   the plugin.
 
 ## 2. Layout
+
+### 2.1 0.5.3 reliability behavior
+
+- The installer chooses a free local port in `8910-8999` by bind-testing it,
+  writes it to `config.json`, and uses the same port for the plugin URL,
+  healthcheck, and shutdown.
+- The launcher recomposes Machine + User PATH, drops reparse points and
+  untraversable entries, and never modifies the persistent User PATH.
+- `/selftest?mode=local` proves mpv/audio without network access.
+  `/selftest?mode=network` proves yt-dlp resolve plus mpv playback. Network
+  failure is recorded as `playback: unverified`; it does not hang a silent
+  install. `install-report.json` records both checks.
+- Silent installs do not show modal dialogs. The Run key launches hidden
+  PowerShell directly; VBS remains a fallback.
+- Upgrade stops sidecars from any YouTubePanel install root, waits for the
+  configured port, and verifies the new PID owns it.
+- User-specific paths are derived from `%LOCALAPPDATA%`, `%PUBLIC%`,
+  `%ProgramFiles%`, and `%SystemRoot%`; no username is hardcoded.
 
 ```
 %LOCALAPPDATA%\YouTubePanel\

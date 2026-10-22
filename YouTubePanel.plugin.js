@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
  * @description Docked YouTube / YouTube Music controller for Discord, driven by a local yt-dlp + mpv sidecar.
- * @version 0.5.1
+ * @version 0.5.3
  * @author jcode
  * @authorId 0
  */
@@ -363,7 +363,12 @@ class YouTubePanel {
       const message = String(data.error || ("sidecar HTTP " + res.status));
       this.log("sidecar " + path + " failed (" + res.status + "): " + message);
       if (/448|untrusted mount point/i.test(message)) {
-        throw new Error("Windows error 448: this path is not trusted. Reinstall YouTubePanel in a normal local folder, for example C:\\Users\\Public\\YouTubePanel.");
+        throw new Error(
+          "Windows error 448: an entry on your Windows PATH is an untrusted junction or mount point, so yt-dlp cannot scan it for ffmpeg. " +
+          "Restart the YouTubePanel sidecar first: run start-sidecar.ps1 in the YouTubePanel install folder (usually %LOCALAPPDATA%\\YouTubePanel or %PUBLIC%\\YouTubePanel), or sign out and back in. " +
+          "If it still fails, remove the flagged PATH entry. Details are in sidecar.log in the install folder. " +
+          "Your persistent PATH is never modified by YouTubePanel."
+        );
       }
       throw new Error(message);
     }

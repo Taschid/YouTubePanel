@@ -200,7 +200,7 @@ global.fetch = baseFetch;
   let blocked = null;
   try { await sp.play({ url: track.url }); } catch (e) { blocked = e; }
   assert(blocked && /Windows error 448/.test(blocked.message), "448 is explained");
-  assert(blocked && /Users\\Public/.test(blocked.message), "448 points at a safe local folder");
+  assert(blocked && /%PUBLIC%/.test(blocked.message), "448 points at a safe local folder");
   global.fetch = goodFetch;
 
   // ---------------------------------------------------------- bot commands
