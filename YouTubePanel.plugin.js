@@ -2277,7 +2277,7 @@ function App({ plugin }) {
     h("div", { className: "yp-settings" },
       h("div", { className: "yp-label" }, "Standalone player"),
       h("div", { className: "yp-hint" },
-        "No sidecar, mpv, or yt-dlp. Playback uses YouTube's embedded player; search reads YouTube's public results page."),
+        "No sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
 
       h("div", { className: "yp-sep" }),
       h("div", { className: "yp-label" }, "Discord music bot"),
