@@ -7,11 +7,12 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $build = Join-Path $PSScriptRoot "build"
 $payload = Join-Path $build "payload"
+$licenses = Join-Path $payload "licenses"
 
 if (-not (Test-Path $InnoCompiler)) { throw "Inno Setup compiler not found: $InnoCompiler" }
 
 Remove-Item $build -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $payload -Force | Out-Null
+New-Item -ItemType Directory -Path $payload, $licenses -Force | Out-Null
 
 Copy-Item (Join-Path $repo "YouTubePanel.plugin.js") $payload -Force
 Copy-Item (Join-Path $repo "tools\youtube-sidecar\sidecar.js") $payload -Force
@@ -27,6 +28,15 @@ $config = [ordered]@{
   searchLimit = 15
 }
 $config | ConvertTo-Json | Set-Content (Join-Path $payload "config.json") -Encoding ascii
+
+try {
+  Invoke-WebRequest -Uri "https://raw.githubusercontent.com/nodejs/node/main/LICENSE" -OutFile (Join-Path $licenses "node-LICENSE.txt") -UseBasicParsing
+  Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/LICENSE" -OutFile (Join-Path $licenses "yt-dlp-LICENSE.txt") -UseBasicParsing
+  Invoke-WebRequest -Uri "https://raw.githubusercontent.com/mpv-player/mpv/master/Copyright" -OutFile (Join-Path $licenses "mpv-Copyright.txt") -UseBasicParsing
+}
+catch {
+  Write-Warning "Some license files could not be downloaded: $($_.Exception.Message)"
+}
 
 @(
   "YouTubePanel slim installer $Version",
