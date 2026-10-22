@@ -77,7 +77,9 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 - `blocked` becomes true when no `initialDelivery`/`infoDelivery` arrives within
   4.5s. The UI can expand the iframe with Show video.
 - Playback starts with `mute=1` for autoplay; `unMute` + `setVolume` follow the
-  first delivery. A still-muted player after 2s sets `blocked`.
+  first delivery. Chrome blocks automatic unmute, so a still-muted player after
+  2s sets `blocked` and the UI shows Enable sound. That button sends `unMute`
+  inside a real click; if it still fails, the iframe expands to 320x180.
 - `error` is set for `onError` and unplayable video data.
 - `videoVisible` controls whether the 2x2 host expands to 320x180.
 
@@ -118,7 +120,7 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 ## 8. Validation checklist
 
 - `node --check YouTubePanel.plugin.js`
-- `.jcode-tests/YouTubePanel.lifecycle-test.js` (76 assertions)
+- `.jcode-tests/YouTubePanel.lifecycle-test.js` (78 assertions)
 - `.jcode-tests/YouTubePanel.live-search-test.js` (network)
 - Headless Chrome: listening handshake, `initialDelivery`, `infoDelivery`,
   `onReady`, 2x2 host, embed error 150.

@@ -725,11 +725,31 @@ class YouTubeEngine {
       return;
     }
     if (this.videoVisible) {
+      this.post("unMute");
+      this.post("setVolume", [this.volume]);
       this._host.style.cssText = "position:fixed;right:16px;bottom:16px;width:320px;height:180px;overflow:hidden;opacity:1;pointer-events:auto;z-index:9999;box-shadow:0 8px 28px rgba(0,0,0,0.65);border:1px solid rgba(255,255,255,0.15);";
     } else {
       this._host.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:0;";
     }
     this.notify();
+  }
+
+  unmuteNow() {
+    this.post("unMute");
+    this.post("setVolume", [this.volume]);
+    this.blocked = false;
+    this.notify();
+  }
+
+  enableSound() {
+    this.unmuteNow();
+    clearTimeout(this._muteTimer);
+    this._muteTimer = setTimeout(() => {
+      if (!this._muted) return;
+      this.setVideoVisible(true);
+      this.blocked = true;
+      this.notify();
+    }, 1200);
   }
 
   load(track) {
@@ -1824,6 +1844,10 @@ function App({ plugin }) {
     state?.blocked
       ? h("div", { className: "yp-error" },
           state?.muted ? "YouTube started muted. " : "YouTube did not autoplay. ",
+          state?.muted ? h("button", {
+            className: "yp-textbtn",
+            onClick: () => plugin.engine.enableSound(),
+          }, "Enable sound") : null,
           h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.setVideoVisible(!state.videoVisible),

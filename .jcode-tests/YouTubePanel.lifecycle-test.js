@@ -259,6 +259,11 @@ const {
   assert(live.isPlaying && live.position === 12.5 && live.duration === 242, "infoDelivery updates state");
   assert(posted.some((msg) => msg.func === "setVolume" && msg.args[0] === 70), "initial volume is pushed");
   assert(posted.some((msg) => msg.func === "unMute"), "player is unmuted after it starts");
+  const beforeSound = posted.length;
+  plugin.engine.enableSound();
+  assert(posted.slice(beforeSound).some((msg) => msg.func === "unMute"), "Enable sound sends unMute in the click");
+  await deliver({ muted: false, playerState: 1, currentTime: 12.5, duration: 242 });
+  assert(plugin.state().muted === false, "mute state clears after the player confirms sound");
 
   plugin.pause();
   assert(posted[posted.length - 1].func === "pauseVideo", "pause maps to pauseVideo");
