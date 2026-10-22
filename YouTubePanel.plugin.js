@@ -1455,6 +1455,7 @@ function App({ plugin }) {
   const [, force] = useReducer((x) => x + 1, 0);
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
+  const [engineError, setEngineError] = useState(null);
   const [view, setView] = useState("now");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
@@ -1485,9 +1486,9 @@ function App({ plugin }) {
       const next = await plugin.state();
       fetchedAt.current = Date.now();
       setState(next);
-      setError(next.error || null);
+      setEngineError(next.error || null);
     } catch (e) {
-      setError(e?.message || "player error");
+      setEngineError(e?.message || "player error");
     }
   };
 
@@ -1499,10 +1500,10 @@ function App({ plugin }) {
         if (!alive) return;
         fetchedAt.current = Date.now();
         setState(next);
-        setError(next.error || null);
+        setEngineError(next.error || null);
       } catch (e) {
         if (!alive) return;
-        setError(e?.message || "player error");
+        setEngineError(e?.message || "player error");
       }
     };
     load();
@@ -1565,6 +1566,7 @@ function App({ plugin }) {
   const run = async (fn) => {
     if (busy) return;
     setBusy(true);
+    setError(null);
     try {
       await fn();
       await refresh();
@@ -1793,8 +1795,8 @@ function App({ plugin }) {
           }, "Open on YouTube") : null)
       : null,
     notice ? h("div", { className: "yp-notice" }, notice) : null,
-    error ? h("div", { className: "yp-error" },
-      error,
+    (error || engineError) ? h("div", { className: "yp-error" },
+      error || engineError,
       track ? h("button", {
         className: "yp-textbtn",
         onClick: () => openExternal(track.url),
@@ -1850,7 +1852,7 @@ function App({ plugin }) {
           ? results.map((t) => row(t, t.id || t.url, () => playTrack(t), addQueue))
           : h("div", { className: "yp-empty" }, "No matches")),
     notice ? h("div", { className: "yp-notice" }, notice) : null,
-    error ? h("div", { className: "yp-error" }, error) : null,
+    (error || engineError) ? h("div", { className: "yp-error" }, error || engineError) : null,
     miniBar
   );
 
@@ -1870,7 +1872,7 @@ function App({ plugin }) {
           ))
         : h("div", { className: "yp-empty" }, "Queue is empty.")),
     notice ? h("div", { className: "yp-notice" }, notice) : null,
-    error ? h("div", { className: "yp-error" }, error) : null,
+    (error || engineError) ? h("div", { className: "yp-error" }, error || engineError) : null,
     miniBar
   );
 
@@ -1938,7 +1940,7 @@ function App({ plugin }) {
       h("div", { className: "yp-hint" },
         "Commands are sent as you. The bot must be in this channel and accept prefix commands. Slash-only bots cannot be controlled this way."),
       notice ? h("div", { className: "yp-notice" }, notice) : null,
-      error ? h("div", { className: "yp-error" }, error) : null
+      (error || engineError) ? h("div", { className: "yp-error" }, error || engineError) : null
     )
   );
 
