@@ -40,7 +40,7 @@ so that needs a second parser.
 | Path | Purpose |
 | --- | --- |
 | `YouTubePanel.plugin.js` | the entire standalone plugin |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 115-assertion offline test |
+| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 116-assertion offline test |
 | `.jcode-tests/YouTubePanel.live-search-test.js` | live search, oEmbed, stream resolver, byte fetch |
 | `tools/youtube-sidecar/` | legacy v0.1.x sidecar; unused by v0.4.0 |
 
@@ -125,7 +125,7 @@ No extra install step.
 ## 6. Validation (2026-10-22)
 
 - `node --check YouTubePanel.plugin.js` clean.
-- **115 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
+- **116 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
   search parsing, queue semantics, settings migration, iframe URL/commands,
   listening handshake, `infoDelivery` state, VISIONOS request/headers,
   stream/audio events, stream-to-embed fallback, seek/volume, repeat, embed

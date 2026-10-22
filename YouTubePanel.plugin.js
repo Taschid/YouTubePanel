@@ -341,6 +341,9 @@ let visitorCache = { value: "", at: 0, auth: "" };
 
 function normalizeYouTubeCookie(input) {
   let raw = String(input || "").trim();
+  if (/\bcurl(?:\.exe)?\b/i.test(raw) || raw.includes('^"')) {
+    raw = raw.replace(/\^\s*\r?\n/g, " ").replace(/\^/g, "");
+  }
   const curlCookie = raw.match(/(?:--header|-H)\s+['"]cookie:\s*([^'"]+)['"]/i);
   if (curlCookie) raw = curlCookie[1];
   if (!raw) return "";
@@ -2238,10 +2241,26 @@ function App({ plugin }) {
         setCookieStatus("Clipboard is empty. Copy the Cookie header first.");
         return;
       }
-      setCookieDraft(text);
-      setCookieStatus(cookieLooksSignedIn(text)
-        ? "Cookie pasted. Click Save login."
-        : "Clipboard text has no YouTube session cookie. Copy the full Cookie header.");
+      const saved = plugin.setYouTubeCookie(text);
+      if (!saved || !cookieLooksSignedIn(saved)) {
+        setCookieDraft(text);
+        setCookieStatus("Clipboard text has no YouTube session cookie. Copy the full Cookie header or cURL.");
+        return;
+      }
+      setCookieDraft("");
+      setCookieStatus("Cookie saved. Checking login...");
+      setLoginBusy(true);
+      try {
+        const result = await plugin.verifyYouTubeLogin();
+        if (result.ok) {
+          setCookieStatus("Signed in as " + result.name + ".");
+          flashNotice("YouTube login verified", 3500);
+        } else {
+          setCookieStatus("Cookie saved. Login check: " + (result.error || "not verified") + ". Playback will test it.");
+        }
+      } finally {
+        setLoginBusy(false);
+      }
     } catch {
       setCookieStatus("Clipboard access was denied. Paste with Ctrl+V into the box.");
     }

@@ -262,6 +262,8 @@ const {
   assert(cookieLooksSignedIn("SID=a") === true, "session cookie is recognized");
   assert(cookieLooksSignedIn("PREF=x") === false, "non-session cookie is rejected");
   assert(normalizeYouTubeCookie("curl 'https://www.youtube.com/' -H 'cookie: SID=a; HSID=b'") === "SID=a; HSID=b", "cURL cookie header extracts");
+  const cmdCurl = "curl.exe ^\"https://www.youtube.com/youtubei/v1/player^\" ^\n  -H ^\"Cookie: SID=a; __Secure-3PSID=b^%^3D^\" ^\n  -H ^\"X-Test: y^\"";
+  assert(normalizeYouTubeCookie(cmdCurl) === "SID=a; __Secure-3PSID=b%3D", "Windows cURL cookie header extracts");
   const noCookieLogin = await verifyYouTubeLogin("");
   assert(noCookieLogin.ok === false, "login check rejects an empty cookie");
 
