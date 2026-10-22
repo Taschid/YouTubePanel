@@ -237,6 +237,7 @@ const {
   // --------------------------------------------------------------- playback
   const state = await plugin.play(parsed[0]);
   assert(state.track.id === parsed[0].id && state.queue.items.length === 1, "play replaces the queue");
+  assert(plugin.state().gotInfo === false, "gotInfo starts false");
   const iframe = domElements.find((el) => el.tagName === "IFRAME");
   assert(!!iframe, "iframe is created");
   assert(iframe.src.includes("youtube.com/embed/K0HSD_i2DvA"), "iframe embeds the video id");
@@ -257,6 +258,7 @@ const {
   await deliver({ playerState: 1, currentTime: 12.5, duration: 242 });
   const live = plugin.state();
   assert(live.isPlaying && live.position === 12.5 && live.duration === 242, "infoDelivery updates state");
+  assert(live.gotInfo === true, "gotInfo turns true after player info");
   assert(posted.some((msg) => msg.func === "setVolume" && msg.args[0] === 70), "initial volume is pushed");
   assert(posted.some((msg) => msg.func === "unMute"), "player is unmuted after it starts");
   const beforeSound = posted.length;

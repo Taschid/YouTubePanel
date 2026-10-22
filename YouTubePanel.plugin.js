@@ -611,6 +611,7 @@ class YouTubeEngine {
     this._ready = false;
     this._started = false;
     this._muted = false;
+    this._gotInfo = false;
   }
 
   start() {
@@ -708,6 +709,7 @@ class YouTubeEngine {
       repeat: this.queue.repeat,
       blocked: this.blocked,
       muted: this._muted,
+      gotInfo: this._gotInfo,
       videoVisible: this.videoVisible,
       error: this.error,
       queue: {
@@ -764,6 +766,7 @@ class YouTubeEngine {
     this._ready = false;
     this._started = false;
     this._muted = true;
+    this._gotInfo = false;
     this._ending = false;
     clearTimeout(this._loadTimer);
     clearTimeout(this._autoplayTimer);
@@ -846,6 +849,7 @@ class YouTubeEngine {
       this.notify();
       return;
     }
+    this._gotInfo = true;
     const info = data.info || {};
     if (typeof info.muted === "boolean") {
       this._muted = info.muted;
@@ -1843,11 +1847,17 @@ function App({ plugin }) {
     ),
     state?.blocked
       ? h("div", { className: "yp-error" },
-          state?.muted ? "YouTube started muted. " : "YouTube did not autoplay. ",
-          state?.muted ? h("button", {
+          (state?.muted && state?.gotInfo)
+            ? "YouTube started muted. "
+            : "YouTube did not start. This video may be blocked from embeds. ",
+          (state?.muted && state?.gotInfo) ? h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.enableSound(),
           }, "Enable sound") : null,
+          track ? h("button", {
+            className: "yp-textbtn",
+            onClick: async () => { await sendBotCommand("play"); },
+          }, "Send to bot") : null,
           h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.setVideoVisible(!state.videoVisible),
@@ -1860,6 +1870,10 @@ function App({ plugin }) {
     notice ? h("div", { className: "yp-notice" }, notice) : null,
     (error || engineError) ? h("div", { className: "yp-error" },
       error || engineError,
+      track ? h("button", {
+        className: "yp-textbtn",
+        onClick: async () => { await sendBotCommand("play"); },
+      }, "Send to bot") : null,
       track ? h("button", {
         className: "yp-textbtn",
         onClick: () => openExternal(track.url),

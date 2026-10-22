@@ -120,7 +120,7 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 ## 8. Validation checklist
 
 - `node --check YouTubePanel.plugin.js`
-- `.jcode-tests/YouTubePanel.lifecycle-test.js` (78 assertions)
+- `.jcode-tests/YouTubePanel.lifecycle-test.js` (80 assertions)
 - `.jcode-tests/YouTubePanel.live-search-test.js` (network)
 - Headless Chrome: listening handshake, `initialDelivery`, `infoDelivery`,
   `onReady`, 2x2 host, embed error 150.
