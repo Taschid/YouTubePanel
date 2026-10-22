@@ -36,3 +36,18 @@ $settings | Add-Member -NotePropertyName sidecarToken -NotePropertyValue $Sideca
 
 $json = $config | ConvertTo-Json -Depth 20
 [IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+
+$dataRoot = Join-Path $env:APPDATA "BetterDiscord\data"
+if (Test-Path $dataRoot) {
+  foreach ($dir in Get-ChildItem $dataRoot -Directory -ErrorAction SilentlyContinue) {
+    $pluginsPath = Join-Path $dir.FullName "plugins.json"
+    if (-not (Test-Path $pluginsPath)) { continue }
+    try {
+      $state = Get-Content $pluginsPath -Raw | ConvertFrom-Json
+      $state | Add-Member -NotePropertyName YouTubePanel -NotePropertyValue $true -Force
+      $stateJson = $state | ConvertTo-Json -Depth 20
+      [IO.File]::WriteAllText($pluginsPath, $stateJson, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    catch {}
+  }
+}

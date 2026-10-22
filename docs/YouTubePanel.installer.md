@@ -17,6 +17,8 @@ One per-user Windows installer for the sidecar build:
 - Merges `sidecarUrl`/`sidecarToken` into `YouTubePanel.config.json` without
   destroying bot/channel settings.
 - Removes the obsolete `youtubeCookie` and `audioSource` settings.
+- Enables `YouTubePanel` in each detected
+  `%APPDATA%\BetterDiscord\data\<branch>\plugins.json`.
 - Starts the sidecar hidden, checks `/health`, and adds a current-user Run key
   so it starts at login.
 - Ships an uninstaller that stops node/mpv/yt-dlp, removes startup, and removes
@@ -78,6 +80,7 @@ committed.
 2. Stops an older sidecar and backs up the old plugin.
 3. Extracts runtime/binaries and copies the plugin.
 4. Merges the sidecar URL/token into the plugin config.
+   Also enables the plugin in BetterDiscord's `plugins.json`.
 5. Starts the hidden sidecar and polls `/health` for up to 45 seconds.
 6. Adds the HKCU Run entry.
 7. Shows a warning if health fails; install still completes.
@@ -95,17 +98,32 @@ after installation.
 
 ## 6. Validation
 
-- Fresh Windows user profile:
-  - Installer completes without admin.
-  - `/health` returns `mpv: true`.
-  - Plugin appears in BetterDiscord and Alt+Q opens it.
-  - UMG/MONSTER plays; pause/seek/next/volume work.
-  - Restart Windows; sidecar auto-starts; playback works.
-  - Uninstall removes plugin, startup entry, and processes.
-- Upgrade over an existing install preserves config and stops the old sidecar.
-- Existing plugin is backed up.
-- SmartScreen/Defender scan; signed build preferred.
-- No process remains on `:8910` after uninstall.
+Tested locally on 2026-10-22:
+
+- Installer exit code 0 with `/VERYSILENT`; no admin.
+- Installed tree present under `%LOCALAPPDATA%\YouTubePanel`.
+- `/health` returned `mpv: true`, yt-dlp `2026.10.21`, port 8910.
+- Destroy Lonely - MONSTER played through the bundled sidecar and stopped.
+- Plugin copied to `%APPDATA%\BetterDiscord\plugins\YouTubePanel.plugin.js`,
+  header `@version 0.5.0`.
+- Config merge kept `musicChannelId`, removed `youtubeCookie` and
+  `audioSource`, added `sidecarUrl`/`sidecarToken`, and set
+  `"YouTubePanel": true` in `data/ptb/plugins.json`.
+- `stop-sidecar.ps1` removed node, mpv, `sidecar.pid`, and the `:8910`
+  listener.
+- The HKCU Run command started the sidecar hidden; `/health` returned true.
+- Uninstall removed the install tree, plugin, Run key, and `:8910` listener;
+  `YouTubePanel.config.json` remained.
+- Reinstall after uninstall succeeded and restored health.
+
+Still required before calling it distribution-ready:
+
+- Fresh Windows user profile or VM install.
+- Discord in-client check: Alt+Q opens the panel, MONSTER/UMG plays, transport
+  works, sidecar survives a Discord restart.
+- Upgrade-over-existing test with a running old sidecar.
+- Code signing and Defender/SmartScreen scan on a downloaded copy.
+- Windows login/logout auto-start test (Run command was tested directly).
 
 ## 7. Known limitations
 

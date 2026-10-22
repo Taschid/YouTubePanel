@@ -75,6 +75,10 @@ Node sidecar.
 
 ## 6. Validation (2026-10-22)
 
+- **Installer v0.5.0**: `YouTubePanel-Setup-0.5.0.exe` (72.4 MB) built with
+  Inno Setup; bundled health returned mpv=true/yt-dlp 2026.10.21; MONSTER
+  played; uninstall/reinstall and hidden auto-start path verified locally.
+  See `YouTubePanel.installer.md` for the full evidence and remaining tests.
 - `node --check` clean for plugin, sidecar and lib.
 - **50 lifecycle assertions**: metadata normalization, hyphenated titles, queue
   next/previous/repeat/shuffle/remove, sidecar URL/method/body/token mapping,
