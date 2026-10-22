@@ -603,12 +603,14 @@ class YouTubeEngine {
     this._loadTimer = 0;
     this._listenTimer = 0;
     this._autoplayTimer = 0;
+    this._muteTimer = 0;
     this._notifyTimer = 0;
     this._volumeSent = false;
     this._ending = false;
     this._playerId = Math.floor(Math.random() * 1000000) + 1;
     this._ready = false;
     this._started = false;
+    this._muted = false;
   }
 
   start() {
@@ -623,10 +625,12 @@ class YouTubeEngine {
     clearTimeout(this._loadTimer);
     clearInterval(this._listenTimer);
     clearTimeout(this._autoplayTimer);
+    clearTimeout(this._muteTimer);
     clearTimeout(this._notifyTimer);
     this._loadTimer = 0;
     this._listenTimer = 0;
     this._autoplayTimer = 0;
+    this._muteTimer = 0;
     this._notifyTimer = 0;
     try { this._iframe?.remove(); } catch {}
     try { this._host?.remove(); } catch {}
@@ -703,6 +707,7 @@ class YouTubeEngine {
       shuffle: this.queue.shuffle,
       repeat: this.queue.repeat,
       blocked: this.blocked,
+      muted: this._muted,
       videoVisible: this.videoVisible,
       error: this.error,
       queue: {
@@ -738,9 +743,12 @@ class YouTubeEngine {
     this._volumeSent = false;
     this._ready = false;
     this._started = false;
+    this._muted = true;
     this._ending = false;
     clearTimeout(this._loadTimer);
     clearTimeout(this._autoplayTimer);
+    clearTimeout(this._muteTimer);
+    this._muteTimer = 0;
     const iframe = this.ensureIframe();
     const origin = (typeof location !== "undefined" && location.origin && location.origin !== "null")
       ? location.origin
@@ -751,6 +759,7 @@ class YouTubeEngine {
       playsinline: "1",
       rel: "0",
       hl: "en",
+      mute: "1",
       ...(origin ? { origin, widget_referrer: location.href } : {}),
     });
     iframe.src = "https://www.youtube.com/embed/" + encodeURIComponent(track.id) + "?" + params.toString();
@@ -783,11 +792,14 @@ class YouTubeEngine {
       clearTimeout(this._loadTimer);
       clearInterval(this._listenTimer);
       clearTimeout(this._autoplayTimer);
+      clearTimeout(this._muteTimer);
       this._loadTimer = 0;
       this._listenTimer = 0;
       this._autoplayTimer = 0;
+      this._muteTimer = 0;
       this.isPlaying = false;
       this.blocked = false;
+      this._muted = false;
       this.error = (code === 101 || code === 150)
         ? "The video owner does not allow embedded playback. Use Open on YouTube."
         : "YouTube player error " + (Number.isFinite(code) ? code : "unknown") + ".";
@@ -815,13 +827,23 @@ class YouTubeEngine {
       return;
     }
     const info = data.info || {};
+    if (typeof info.muted === "boolean") {
+      this._muted = info.muted;
+      if (!info.muted) {
+        clearTimeout(this._muteTimer);
+        this._muteTimer = 0;
+        this.blocked = false;
+      }
+    }
     if (info.videoData && info.videoData.isPlayable === false) {
       clearTimeout(this._loadTimer);
       clearInterval(this._listenTimer);
       clearTimeout(this._autoplayTimer);
+      clearTimeout(this._muteTimer);
       this._loadTimer = 0;
       this._listenTimer = 0;
       this._autoplayTimer = 0;
+      this._muteTimer = 0;
       this.isPlaying = false;
       this.error = "YouTube cannot play this video here. Use Open on YouTube.";
       this.notify();
@@ -853,7 +875,15 @@ class YouTubeEngine {
       clearTimeout(this._loadTimer);
       this._loadTimer = 0;
       this.blocked = false;
+      this.post("unMute");
       this.post("setVolume", [this.volume]);
+      clearTimeout(this._muteTimer);
+      this._muteTimer = setTimeout(() => {
+        if (this._muted) {
+          this.blocked = true;
+          this.notify();
+        }
+      }, 2000);
     }
     this.notify();
   }
@@ -931,6 +961,9 @@ class YouTubeEngine {
 
   pause() {
     this.post("pauseVideo");
+    clearTimeout(this._autoplayTimer);
+    this._autoplayTimer = 0;
+    this.blocked = false;
     this.isPlaying = false;
     this.notify();
     return this.snapshot();
@@ -967,8 +1000,11 @@ class YouTubeEngine {
   stop() {
     this.post("stopVideo");
     clearTimeout(this._autoplayTimer);
+    clearTimeout(this._muteTimer);
     this._autoplayTimer = 0;
+    this._muteTimer = 0;
     this._started = false;
+    this._muted = false;
     this.isPlaying = false;
     this.position = 0;
     this._volumeSent = false;
@@ -978,8 +1014,11 @@ class YouTubeEngine {
 
   clearQueue() {
     clearTimeout(this._autoplayTimer);
+    clearTimeout(this._muteTimer);
     this._autoplayTimer = 0;
+    this._muteTimer = 0;
     this._started = false;
+    this._muted = false;
     this.error = "";
     this.blocked = false;
     this.videoVisible = false;
@@ -1784,7 +1823,7 @@ function App({ plugin }) {
     ),
     state?.blocked
       ? h("div", { className: "yp-error" },
-          "YouTube did not autoplay. ",
+          state?.muted ? "YouTube started muted. " : "YouTube did not autoplay. ",
           h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.setVideoVisible(!state.videoVisible),

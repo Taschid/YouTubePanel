@@ -35,7 +35,7 @@ so that needs a second parser.
 | Path | Purpose |
 | --- | --- |
 | `YouTubePanel.plugin.js` | the entire standalone plugin |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 74-assertion offline test |
+| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 76-assertion offline test |
 | `.jcode-tests/YouTubePanel.live-search-test.js` | optional live search + oEmbed check |
 | `tools/youtube-sidecar/` | legacy v0.1.x sidecar; unused by v0.2.0 |
 
@@ -93,7 +93,7 @@ No extra install step.
 ## 6. Validation (2026-10-22)
 
 - `node --check YouTubePanel.plugin.js` clean.
-- **74 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
+- **76 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
   search parsing, queue semantics, settings migration, iframe URL/commands,
   listening handshake, `infoDelivery` state, seek/volume, repeat, embed error,
   bot URL/query/prefix/raw/skip, missing channel/track/disabled play, BD
@@ -118,6 +118,9 @@ No extra install step.
   error 101/150 is surfaced with an Open on YouTube action.
 - **Autoplay** can be blocked by Chromium. Show video expands the player so the
   user can click YouTube's play button.
+- **Autoplay strategy**: the iframe starts with `mute=1` (muted autoplay is
+  always allowed), then sends `unMute` and `setVolume` after
+  `initialDelivery`. If it is still muted after 2s, Show video appears.
 - **YouTube HTML changes** can break search parsing. URL playback still works.
 - **Consent/captcha pages** can block search depending on region/IP.
 - **Ads** may play before or during a video.

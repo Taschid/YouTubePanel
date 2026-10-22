@@ -241,6 +241,7 @@ const {
   assert(!!iframe, "iframe is created");
   assert(iframe.src.includes("youtube.com/embed/K0HSD_i2DvA"), "iframe embeds the video id");
   assert(iframe.src.includes("enablejsapi=1") && iframe.src.includes("autoplay=1"), "iframe enables the js api");
+  assert(iframe.src.includes("mute=1"), "iframe starts muted for autoplay");
   assert(iframe.attrs.allow.includes("autoplay"), "iframe allows autoplay");
   assert(posted.some((msg) => msg.event === "listening" && msg.channel === "widget"), "iframe API handshake is sent");
 
@@ -257,6 +258,7 @@ const {
   const live = plugin.state();
   assert(live.isPlaying && live.position === 12.5 && live.duration === 242, "infoDelivery updates state");
   assert(posted.some((msg) => msg.func === "setVolume" && msg.args[0] === 70), "initial volume is pushed");
+  assert(posted.some((msg) => msg.func === "unMute"), "player is unmuted after it starts");
 
   plugin.pause();
   assert(posted[posted.length - 1].func === "pauseVideo", "pause maps to pauseVideo");
