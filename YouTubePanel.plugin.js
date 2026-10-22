@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
  * @description Standalone YouTube / YouTube Music controller for Discord with stream extraction and embed fallback. No sidecar, mpv, or yt-dlp.
- * @version 0.4.0
+ * @version 0.4.1
  * @author jcode
  * @authorId 0
  */
@@ -350,6 +350,10 @@ function normalizeYouTubeCookie(input) {
     }).filter(Boolean).join("; ");
   }
   return raw.replace(/^cookie:\s*/i, "").replace(/\s+/g, " ").trim();
+}
+
+function cookieLooksSignedIn(cookie) {
+  return /(?:^|;\s*)(?:SID|__Secure-\dPSID|SAPISID|__Secure-\dPAPISID)=/.test(normalizeYouTubeCookie(cookie));
 }
 
 function youtubeCookieValue(cookie, name) {
@@ -2225,10 +2229,28 @@ function App({ plugin }) {
     openExternal("https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F");
   };
 
+  const pasteYouTubeCookie = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text || !text.trim()) {
+        setCookieStatus("Clipboard is empty. Copy the Cookie header first.");
+        return;
+      }
+      setCookieDraft(text);
+      setCookieStatus(cookieLooksSignedIn(text)
+        ? "Cookie pasted. Click Save login."
+        : "Clipboard text has no YouTube session cookie. Copy the full Cookie header.");
+    } catch {
+      setCookieStatus("Clipboard access was denied. Paste with Ctrl+V into the box.");
+    }
+  };
+
   const saveYouTubeCookie = () => {
     const saved = plugin.setYouTubeCookie(cookieDraft);
     setCookieDraft("");
-    setCookieStatus(saved ? "Cookie saved. Test login or play a restricted video." : "Not signed in. Restricted videos fall back to the embed.");
+    if (!saved) setCookieStatus("Not signed in. Restricted videos fall back to the embed.");
+    else if (!cookieLooksSignedIn(saved)) setCookieStatus("Cookie saved, but no YouTube session cookie was found. Copy the full Cookie header.");
+    else setCookieStatus("Cookie saved. Test login or play a restricted video.");
     flashNotice(saved ? "YouTube login saved (hidden)" : "YouTube login cleared", 3500);
   };
 
@@ -2459,11 +2481,13 @@ function App({ plugin }) {
     h("div", { className: "yp-settings" },
       h("div", { className: "yp-label" }, "Standalone player"),
       h("div", { className: "yp-hint" },
-        "v0.4.0 - no sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
+        "v0.4.1 - no sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
 
       h("div", { className: "yp-sep" }),
       h("div", { className: "yp-label" }, "YouTube account"),
       h("div", { className: "yp-hint" }, cookieStatus),
+      h("div", { className: "yp-hint" },
+        "1. Open YouTube login. 2. Sign in and reload youtube.com. 3. DevTools > Network > a youtube.com request > Request Headers > copy Cookie. 4. Paste here and Save."),
       h("textarea", {
         className: "yp-input yp-cookie",
         rows: 3,
@@ -2477,6 +2501,7 @@ function App({ plugin }) {
       }),
       h("div", { className: "yp-row2" },
         h("button", { className: "yp-textbtn", onClick: openYouTubeLogin }, "Open YouTube login"),
+        h("button", { className: "yp-textbtn", onClick: pasteYouTubeCookie }, "Paste clipboard"),
         h("button", { className: "yp-textbtn", onClick: () => setShowCookie(!showCookie) }, showCookie ? "Hide cookie" : "Show cookie")),
       h("div", { className: "yp-row2" },
         h("button", { className: "yp-primary", disabled: !cookieDraft.trim(), onClick: saveYouTubeCookie }, "Save login"),
@@ -2682,6 +2707,7 @@ YouTubePanel._internals = {
   resolveAudioStream,
   netFetchBuffer,
   normalizeYouTubeCookie,
+  cookieLooksSignedIn,
   verifyYouTubeLogin,
   LocalQueue,
   YouTubeEngine,

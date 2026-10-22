@@ -1,6 +1,6 @@
 # YouTubePanel scope
 
-Status: v0.4.0 standalone + stream extraction + account login (2026-10-22)
+Status: v0.4.1 standalone + stream extraction + account login (2026-10-22)
 Plugin: `YouTubePanel.plugin.js`
 Dependencies: BetterDiscord only (no sidecar, mpv, yt-dlp, or Node server)
 
@@ -11,7 +11,7 @@ Music without Spotify. It reuses the SpotifyPanel visual language and the
 verified Discord music-bot bridge, but it is a separate plugin and separate
 product.
 
-v0.4.0 installs as one file, resolves audio through YouTube's `VISIONOS`
+v0.4.1 installs as one file, resolves audio through YouTube's `VISIONOS`
 Innertube client, and plays it as a Blob through `<audio>`. The embedded player
 remains the fallback.
 

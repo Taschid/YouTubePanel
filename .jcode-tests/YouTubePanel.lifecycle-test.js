@@ -243,6 +243,7 @@ const {
   extractYouTubeInitialData,
   parseYouTubeSearchData,
   normalizeYouTubeCookie,
+  cookieLooksSignedIn,
   verifyYouTubeLogin,
   LocalQueue,
 } = YouTubePanel._internals;
@@ -258,6 +259,8 @@ const {
   assert(normalizeYouTubeCookie("Cookie: SID=a; HSID=b") === "SID=a; HSID=b", "raw cookie header normalizes");
   assert(normalizeYouTubeCookie("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta\n.youtube.com\tTRUE\t/\tTRUE\t0\tHSID\tb") === "SID=a; HSID=b", "cookies.txt normalizes");
   assert(normalizeYouTubeCookie("#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta") === "SID=a", "HttpOnly cookies.txt entry normalizes");
+  assert(cookieLooksSignedIn("SID=a") === true, "session cookie is recognized");
+  assert(cookieLooksSignedIn("PREF=x") === false, "non-session cookie is rejected");
   const noCookieLogin = await verifyYouTubeLogin("");
   assert(noCookieLogin.ok === false, "login check rejects an empty cookie");
 

@@ -1,6 +1,6 @@
 # YouTubePanel standalone spec
 
-Status: v0.4.0 (2026-10-22)
+Status: v0.4.1 (2026-10-22)
 Scope: one-file BetterDiscord plugin; no sidecar, mpv, yt-dlp, Node server, or
 localhost process.
 
@@ -169,7 +169,7 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 ## 9. Validation checklist
 
 - `node --check YouTubePanel.plugin.js`
-- `.jcode-tests/YouTubePanel.lifecycle-test.js` (112 assertions)
+- `.jcode-tests/YouTubePanel.lifecycle-test.js` (114 assertions)
 - `.jcode-tests/YouTubePanel.live-search-test.js` (network)
 - Live resolver: VISIONOS `OK`, itag 140 URL, ranged byte fetch.
 - Headless Chrome: listening handshake, `initialDelivery`, `infoDelivery`,
