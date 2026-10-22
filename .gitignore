@@ -1,4 +1,6 @@
 *.tokens.json
 *.config.json
+installer/build/
+installer/output/
 .jcode-tests/../.git
 node_modules/

@@ -1,219 +1,117 @@
 # YouTubePanel build log
 
-Status: v0.4.1 (2026-10-22), standalone + stream extraction + account login
+Status: v0.5.0 (2026-10-22), packaged sidecar build
 Plugin: `YouTubePanel.plugin.js`
-Sidecar: none (legacy files remain in `tools/youtube-sidecar/`)
-Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`,
-`.jcode-tests/YouTubePanel.live-search-test.js`
+Sidecar: `tools/youtube-sidecar/`
+Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`
+Installer: `installer/YouTubePanel.iss`, `installer/build.ps1`
 
 ## 1. What shipped
 
-A separate right-docked Discord panel for YouTube / YouTube Music that installs
-as **one file**. No Node sidecar, no `start-youtube-panel.cmd`, no mpv, no
-yt-dlp, and no localhost server.
+A separate right-docked Discord panel for YouTube / YouTube Music, plus a local
+Node sidecar.
 
-- **Playback:** default path resolves the audio stream through YouTube's
-  `VISIONOS` Innertube client, fetches it with `BdApi.Net.fetch`, and plays it
-  as a Blob through `<audio>`. The 2x2 embed iframe remains the fallback.
-- **Search:** YouTube's public results page, fetched through `BdApi.Net.fetch`
-  and parsed from `ytInitialData`.
-- **Metadata:** YouTube oEmbed for title, channel and thumbnail.
-- **URLs:** play a YouTube / YouTube Music / Shorts / `youtu.be` URL.
-- **Queue:** play, add, next/previous, jump, remove, clear, shuffle, repeat
-  off/all/one.
-- **Transport:** play/pause, seek, volume, stop.
-- **Discord bot:** left-click Send posts `{prefix}play <youtube-url>`;
-  right-click opens the command sheet. Jockie/JMusicBot/MusicBot/Custom.
-- **Settings:** audio source (`Auto`, `Stream`, `Embed`), bot/channel, height,
-  hotkey. No sidecar fields.
-- **Login:** optional YouTube Cookie header import for age-restricted and
-  members-only videos. Stored locally, masked, never logged.
-- **Label-blocked videos:** stream extraction plays UMG/embed-blocked videos
-  in-panel. If extraction fails, the embed iframe is used, then Send to bot /
-  Open on YouTube.
-
-No playlists in v0.4.0. YouTube now serves playlist items as `lockupViewModel`,
-so that needs a second parser.
+- **Player:** thumbnail, title, artist, progress, elapsed/total, play/pause,
+  previous/next, seek, volume, shuffle, repeat, stop.
+- **Search:** YouTube search (15 results), play or add to queue.
+- **URLs:** play a YouTube/YouTube Music video URL, play a public playlist URL,
+  or queue a playlist.
+- **Queue:** current/upcoming rows, jump, remove, clear.
+- **Settings:** sidecar URL/token + health, bot profile/prefix/templates,
+  Discord channel id, height/hotkey in BD settings.
+- **Discord bot:** left-click Send posts `{prefix}play <youtube-url>`; right-click
+  opens the command sheet (play, pause, resume, skip, previous, repeat, shuffle,
+  queue, now playing, stop, custom). Jockie/JMusicBot/MusicBot/Custom profiles.
+- **Coexistence:** registers `window.__jcodePanels.youtube`; showing YouTube hides
+  SpotifyPanel/SideChat, and startup hides the other panels so they never overlap.
+  The left-edge guard is inside the panel, so it cannot be clicked through from
+  the neighbouring panel. SpotifyPanel was only touched to apply the same
+  startup mutual-exclusion rule.
 
 ## 2. Files
 
 | Path | Purpose |
 | --- | --- |
-| `YouTubePanel.plugin.js` | the entire standalone plugin |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 116-assertion offline test |
-| `.jcode-tests/YouTubePanel.live-search-test.js` | live search, oEmbed, stream resolver, byte fetch |
-| `tools/youtube-sidecar/` | legacy v0.1.x sidecar; unused by v0.4.0 |
+| `YouTubePanel.plugin.js` | single-file BetterDiscord panel |
+| `tools/youtube-sidecar/sidecar.js` | HTTP API, yt-dlp + mpv control, queue/state |
+| `tools/youtube-sidecar/lib.js` | pure metadata/queue helpers |
+| `tools/youtube-sidecar/start-youtube-panel.cmd` | launcher + dependency check |
+| `tools/youtube-sidecar/config.example.json` | port/token/paths/volume |
+| `tools/youtube-sidecar/README.md` | setup and API reference |
+| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 50-assertion headless test |
 
-## 3. Architecture
+## 3. Sidecar
 
-```
-Discord renderer (YouTubePanel.plugin.js)
-  |-- BdApi.Net.fetch -> watch page + Innertube player + googlevideo (stream)
-  |-- <audio> + Blob  -> resolved audio bytes
-  |-- hidden iframe   -> youtube.com/embed/<id>       (fallback)
-  |-- Cookie header  -> authorized watch/player requests
-  '-- BdApi.Webpack   -> sendMessage (bot bridge, unchanged)
-```
-
-### Stream extraction
-
-1. Fetch `youtube.com/watch?v=<id>&hl=en`, extract `visitorData`.
-2. POST to `/youtubei/v1/player` with the `VISIONOS` client context:
-   `clientName: VISIONOS`, `clientVersion: 1.02`, Apple device fields,
-   `X-Goog-Visitor-Id`, `X-Goog-Api-Format-Version: 2`.
-3. Pick AAC `itag 140` (fallback 251/139) from `streamingData.adaptiveFormats`.
-4. Fetch the direct `googlevideo.com` URL through `BdApi.Net.fetch`.
-5. Build a Blob URL and play it through a hidden `<audio>` element.
-
-The `VISIONOS` client ignores the publisher's `playableInEmbed` flag. This is
-why UMG/label-blocked videos work. It also bypasses ads, which is a ToS risk.
-
-With a login cookie, the watch and player requests carry `Cookie` plus an
-optional `SAPISIDHASH` retry. The cookie is never sent to `googlevideo.com`.
-
-### Embed fallback
-
-The iframe host is appended to `document.body`, outside the panel, so hiding
-the panel does not stop playback. It is a 2x2 element with opacity `0.01`;
-YouTube initializes and plays normally at that size (verified in headless
-Chrome).
-
-### iframe protocol
-
-YouTube needs a listening handshake before it sends player events:
-
-```js
-{ event: "listening", id: playerId, channel: "widget" }
-{ event: "command", func: "playVideo", args: [], id: playerId, channel: "widget" }
-```
-
-Commands used: `playVideo`, `pauseVideo`, `stopVideo`, `seekTo`, `setVolume`.
-Events handled: `initialDelivery`, `infoDelivery`, `onReady`,
-`alreadyInitialized`, `onError`.
+- Binds `127.0.0.1:8910`, token `youtube-panel` by default.
+- `yt-dlp` does `ytsearch15:`, single-video metadata (`--no-playlist`), playlist
+  flattening (`--flat-playlist`) and stream resolution (`-g -f bestaudio/best`).
+- `mpv` runs `--no-video --no-config --idle=yes --no-terminal` with a JSON IPC
+  named pipe (`\\.\pipe\youtube-panel-mpv-<pid>`).
+- Queue lives in the sidecar. `end-file` advances it; repeat one/off/all honored.
+- Metadata fallback: `track`/`artist` are often empty on YouTube; the sidecar
+  parses `Artist - Title`, strips `(Official Video/Audio/Lyrics/Remastered)`,
+  strips ` - Topic` from uploaders, and uses `i.ytimg.com` thumbnails.
+- mpv path auto-detection covers the winget install location when PATH is stale.
+- Errors are returned as `{ error }` with HTTP 500; the panel shows them inline.
 
 ## 4. Panel behaviour
 
-- Polls `engine.snapshot()` every 1s; interpolates progress every 500ms.
+- Polls `/state` every 1s; interpolates progress every 500ms.
 - Left-click Send: bot play with the current YouTube URL.
-- Right-click Send: bot command sheet.
-- Audio source `Auto` tries stream extraction, then falls back to the embed.
-- Stream path keeps one hidden `<audio>` element; Blob URLs are revoked on
-  track change, stop, and reload.
-- Volume is persisted and applied directly to `<audio>` or via iframe commands.
-- Optional YouTube login uses a pasted Cookie header for age-restricted and
-  members-only videos. It is stored locally, masked in the UI, and never logged.
-- Search results are cached for 2 minutes; repeated Go presses do not refetch.
-- A stalled autoplay (no playing/buffering state within 4.5s) sets `blocked` so
-  the Show video fallback appears.
-- v0.1.x sidecar config keys are deleted and the cleaned settings are saved.
-- Artwork uses the same width/height budget as SpotifyPanel.
-- Cleanup: removes the iframe, message listener, timers, panel, CSS and
-  registry entry on stop.
+- Right-click Send: bot command sheet; result appears inside the sheet.
+- Sidecar offline: inline error with the launcher path; settings has Test.
+- Volume is persisted in plugin settings and pushed to mpv on first state load.
+- Artwork uses the same width/height budget as SpotifyPanel: full-bleed
+  `panelWidth - 48` in full-height mode, height-bound when manually resized.
+- Cleanup: unregisters the panel and removes CSS/style on stop.
 
 ## 5. Setup
 
-1. Put `YouTubePanel.plugin.js` in `%APPDATA%\BetterDiscord\plugins`.
-2. Enable **YouTubePanel** in BetterDiscord (hotkey `Alt+Q`).
-3. Panel settings: choose Audio source (`Auto` by default), set the music
-   channel id and bot.
-4. Optional: YouTube account → Open YouTube login → paste the `Cookie` header
-   from a logged-in `youtube.com` request → Save/Test.
-5. Search, or paste a YouTube URL. Press Play.
-
-No extra install step.
+1. `winget install yt-dlp.yt-dlp`
+2. `winget install shinchiro.mpv`
+3. Run `tools/youtube-sidecar/start-youtube-panel.cmd`.
+4. Enable **YouTubePanel** in BetterDiscord (hotkey `Alt+Q`).
+5. Panel settings: set the music channel id and bot; test the sidecar.
 
 ## 6. Validation (2026-10-22)
 
-- `node --check YouTubePanel.plugin.js` clean.
-- **116 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
-  search parsing, queue semantics, settings migration, iframe URL/commands,
-  listening handshake, `infoDelivery` state, VISIONOS request/headers,
-  stream/audio events, stream-to-embed fallback, seek/volume, repeat, embed
-  error, bot URL/query/prefix/raw/skip, missing channel/track/disabled play,
-  cookie normalization, account-menu verification, auth headers, BD settings,
-  coexistence.
-- **Live search**: `searchYouTube("daft punk around the world")` returned 15+
-  results; oEmbed resolved title and thumbnail.
-- **Live stream resolver**: the UMG-blocked `K0HSD_i2DvA` returned `OK` and
-  AAC `itag 140` (`contentLength` 3.9 MB); a ranged byte fetch succeeded.
-- **Headless Chrome**: a real YouTube embed initialized at 2x2 and emitted
-  `initialDelivery`, `onReady`, `infoDelivery`, and `apiInfoDelivery` after the
-  listening handshake. `isPlayable:true`, `duration:1344`, player state 3
-  (buffering).
-- **Embed restriction**: `K0HSD_i2DvA` returns `onError:150` in the iframe;
-  the stream path plays it instead.
-- **CSP evidence**: Discord stable/PTB `frame-src` includes
-  `https://www.youtube.com/embed/`; `img-src` includes `https://i.ytimg.com`.
-- **No sidecar**: no `localhost`, `8910`, `mpv`, `yt-dlp`, or `.cmd` references
-  remain in the plugin.
+- `node --check` clean for plugin, sidecar and lib.
+- **50 lifecycle assertions**: metadata normalization, hyphenated titles, queue
+  next/previous/repeat/shuffle/remove, sidecar URL/method/body/token mapping,
+  offline error, bot URL/query/prefix/raw/skip, missing channel/track/disabled
+  play, BD settings, coexistence.
+- **Headless Chrome real-React smoke**: panel mounted; title and times rendered;
+  right-click bot sheet sent `m!skip`; search returned 2 rows; clicking a result
+  sent `/play` for the right URL; settings showed 4 bot presets and the URL
+  preview; queue showed 2 rows. No runtime errors.
+- **Live sidecar**: `/health` mpv=true; `/search` returned 15 results; `/play`
+  played Daft Punk - Around The World; `pause`, `seek 30`, `resume`, `next` and
+  `stop` all changed state as expected. mpv 0.41.0, yt-dlp 2026.08.19.
+- **CORS preflight**: `OPTIONS /play` from `https://discord.com` returns 204 with
+  `Access-Control-Allow-Origin: *` and the token/content-type headers.
 
 ## 7. Known limitations
 
-- **ToS / ads**: stream extraction bypasses label embed blocks and ads. This is
-  almost certainly a YouTube ToS violation and is not suitable for the official
-  BetterDiscord library.
-- **API fragility**: the VISIONOS client, public Innertube key, `visitorData`,
-  and direct URL format can change without notice. The embed/Open fallbacks
-  remain.
-- **Memory**: the full audio file is fetched into a Blob (about 1-4 MB per
-  song). Blob URLs are revoked on change.
-- **Cookie security**: the YouTube cookie is stored in plaintext in plugin
-  settings and grants account access. Use a dedicated account; never share it.
-- **Cookie expiry**: Google can invalidate it; re-import from a logged-in
-  browser request.
-- **Members-only**: may still fail if YouTube requires more session state.
-- **Age/private/login**: without a cookie, resolver returns `LOGIN_REQUIRED`
-  and the panel falls back to the embed. With a valid cookie, the signed retry
-  attempts playback; members-only may still fail.
-- **Embed-restricted videos** still fail in the embed fallback; the stream path
-  is what plays them.
-- **Autoplay** can be blocked by Chromium. Show video expands the player so the
-  user can click YouTube's play button.
-- **Autoplay strategy**: the iframe starts with `mute=1` (muted autoplay is
-  always allowed), then sends `unMute` and `setVolume` after
-  `initialDelivery`. Chrome still blocks that automatic unmute, so if it is
-  still muted after 2s the panel shows Enable sound. That button sends
-  `unMute` inside a real click and expands the video only if that fails.
-- **YouTube HTML changes** can break search parsing. URL playback still works.
-- **Consent/captcha pages** can block search depending on region/IP.
-- **Ads** may play before or during a video.
-- **No playlists** in v0.4.0.
-- **Optional account**: a valid cookie handles many age-restricted and
-  members-only videos; private or purchased content may still be unavailable.
-- **Audio-only**; no video mode (Show video is a fallback, not a feature).
-- **Background playback** depends on Chromium keeping the offscreen iframe
-  alive in embed mode. Stream mode uses `<audio>`, which is more reliable.
-- **BetterDiscord does not reliably hot-reload**; toggle the plugin after
-  replacing the file.
+- Public content only; no account login, liked songs, subscriptions or private
+  playlists.
+- Audio-only; no video.
+- yt-dlp and mpv are external dependencies; updates can break extraction.
+- yt-dlp stream extraction is a YouTube ToS gray area; personal/local use only.
+- No packaged sidecar exe yet; launcher + Node/winget dependencies for v1.
+- Thumbnail host may be blocked by a strict theme; sidecar proxy is the fallback.
+- BetterDiscord does not hot-reload; toggle the plugin after updating.
 
 ## 8. Next steps
 
-- Add `lockupViewModel` playlist parsing.
-- Add MediaSource range streaming to avoid full-file memory use.
-- Add resolver client fallbacks (VISIONOS → other non-embed clients).
-- Add a visible video toggle that is a first-class setting, not only a fallback.
-- Cache search results briefly and add a spinner state.
-- Consider filtering embed-restricted results when YouTube exposes that flag.
-- Optionally provide a command-only "lite" build for users who do not want an
-  iframe.
+- Package the sidecar as a single exe and bundle/point to yt-dlp + mpv.
+- Optional cookies for age-restricted/private content and YT Music library.
+- Sidecar thumbnail proxy for CSP-restricted themes.
+- Optional bulk "send queue to bot" action.
+- Decide whether to offer an official IFrame fallback for ToS-sensitive users.
 
-## 9. Version history
+## 8. Version history
 
-- **0.4.1**: add Paste clipboard and cookie-shape validation, clearer login
-  instructions, cURL import, and prevent an empty/non-session cookie from
-  looking saved.
-- **0.4.0**: optional YouTube Cookie login for age-restricted/members-only
-  videos, cookie normalization, account-menu verification, staged
-  `SAPISIDHASH` retry, masked account UI, and login-required CTA.
-- **0.3.1**: reuse `visitorData` from the search page, harden watch-page
-  fallbacks, expose `Stream:` errors, add Retry stream, and show the build
-  version in settings.
-- **0.3.0**: VISIONOS stream extraction for UMG/label-blocked videos, Blob
-  `<audio>` playback, `audioSource` setting, stream-to-embed fallback, live
-  resolver/byte validation.
-- **0.2.0**: standalone rewrite. Removed the sidecar; added iframe playback,
-  `BdApi.Net.fetch` search, oEmbed metadata, listening handshake, autoplay and
-  embed-error fallbacks; one-file install.
-- **0.1.1**: hotkey moved from Alt+Y to Alt+Q, Spotify-matched artwork sizing,
-  inside-panel left-edge guard, startup mutual exclusion.
+- **0.1.1**: hotkey moved from Alt+Y to Alt+Q (existing Alt+Y configs migrate
+  on load), Spotify-matched artwork sizing, inside-panel left-edge guard, and
+  startup mutual exclusion so right-column panels do not overlap.
 - **0.1.0**: initial YouTubePanel + yt-dlp/mpv sidecar.

@@ -1,0 +1,24 @@
+YouTubePanel third-party notices
+
+This installer bundles the following open-source components for the current
+Windows user. Versions may vary at build time; see about.txt for the exact build.
+
+- Node.js — MIT License
+  https://github.com/nodejs/node/blob/main/LICENSE
+  Used only to run the local sidecar process.
+
+- yt-dlp — The Unlicense
+  https://github.com/yt-dlp/yt-dlp/blob/master/LICENSE
+  Used for YouTube search, metadata and audio stream resolution.
+
+- mpv — GPLv2+ (with LGPL components)
+  https://github.com/mpv-player/mpv/blob/master/Copyright
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+  Used for local audio playback. The bundled mpv build is redistributed
+  unmodified.
+
+- Inno Setup — used only to build the installer; not bundled.
+  https://jrsoftware.org/isinfo.php
+
+No YouTube media is bundled. The sidecar resolves public streams at runtime.
+Use this private build at your own risk and in accordance with YouTube's terms.

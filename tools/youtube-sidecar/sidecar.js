@@ -13,6 +13,13 @@ const { spawn, execFile } = require("child_process");
 const { normalizeSearch, normalizeList, normalizeTrack, Queue } = require("./lib");
 
 const ROOT = __dirname;
+const PID_FILE = path.join(ROOT, "sidecar.pid");
+const LOG_FILE = path.join(ROOT, "sidecar.log");
+try { fs.writeFileSync(PID_FILE, String(process.pid), "utf8"); } catch {}
+function cleanupPid() {
+  try { fs.unlinkSync(PID_FILE); } catch {}
+}
+process.on("exit", cleanupPid);
 const DEFAULTS = {
   port: 8910,
   token: "youtube-panel",
@@ -76,7 +83,15 @@ let isPaused = false;
 let volume = CONFIG.volume;
 
 function log(...args) {
-  console.log("[ytpanel]", ...args);
+  const line = "[ytpanel] " + args.map((value) => {
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  }).join(" ");
+  console.log(line);
+  try {
+    if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 2 * 1024 * 1024) fs.writeFileSync(LOG_FILE, "");
+    fs.appendFileSync(LOG_FILE, line + "\n");
+  } catch {}
 }
 
 function runYtdlp(args, timeoutMs) {

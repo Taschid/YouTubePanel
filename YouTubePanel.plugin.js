@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
- * @description Standalone YouTube / YouTube Music controller for Discord with stream extraction and embed fallback. No sidecar, mpv, or yt-dlp.
- * @version 0.4.1
+ * @description Docked YouTube / YouTube Music controller for Discord, driven by a local yt-dlp + mpv sidecar.
+ * @version 0.5.0
  * @author jcode
  * @authorId 0
  */
@@ -12,6 +12,8 @@ const h = React.createElement;
 const { useState, useEffect, useRef, useReducer } = React;
 
 const DEFAULT_SETTINGS = {
+  sidecarUrl: "http://127.0.0.1:8910",
+  sidecarToken: "youtube-panel",
   musicChannelId: "",
   musicBotId: "jockie",
   musicBotPrefix: "",
@@ -23,15 +25,7 @@ const DEFAULT_SETTINGS = {
   hotkey: ["Alt", "q"],
   topOffset: 12,
   volume: 70,
-  audioSource: "auto",
-  youtubeCookie: "",
 };
-
-const AUDIO_SOURCES = [
-  { id: "auto", label: "Auto (stream, then embed)" },
-  { id: "stream", label: "Stream extraction" },
-  { id: "embed", label: "YouTube embed" },
-];
 
 const MUSIC_BOT_ACTIONS = [
   { id: "play", label: "Play current track", icon: "play" },
@@ -291,7 +285,6 @@ const CSS = `
 .yp-settings { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 0 12px; }
 .yp-template-list { display: flex; flex-direction: column; gap: 8px; padding: 2px 0; }
 .yp-template-row { display: flex; flex-direction: column; gap: 3px; }
-.yp-cookie { min-height: 64px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 10px; line-height: 1.35; }
 `;
 
 // ------------------------------------------------------------------ helpers
@@ -321,1227 +314,6 @@ function openExternal(url) {
   return false;
 }
 
-// ------------------------------------------------------------ youtube local
-const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
-const YT_INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
-const YT_WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
-const YT_VISIONOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
-const YT_VISIONOS_CONTEXT = {
-  clientName: "VISIONOS",
-  clientVersion: "1.02",
-  deviceMake: "Apple",
-  deviceModel: "RealityDevice17,1",
-  userAgent: YT_VISIONOS_UA,
-  osName: "visionOS",
-  osVersion: "26.5.23O471",
-  hl: "en",
-  gl: "US",
-};
-let visitorCache = { value: "", at: 0, auth: "" };
-
-function normalizeYouTubeCookie(input) {
-  let raw = String(input || "").trim();
-  if (/\bcurl(?:\.exe)?\b/i.test(raw) || raw.includes('^"')) {
-    raw = raw.replace(/\^\s*\r?\n/g, " ").replace(/\^/g, "");
-  }
-  const curlCookie = raw.match(/(?:--header|-H)\s+['"]cookie:\s*([^'"]+)['"]/i);
-  if (curlCookie) raw = curlCookie[1];
-  if (!raw) return "";
-  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && (!line.startsWith("#") || line.startsWith("#HttpOnly_")));
-  if (lines.some((line) => line.includes("\t"))) {
-    return lines.map((line) => {
-      const parts = line.replace(/^#HttpOnly_/, "").split("\t");
-      return parts.length >= 7 ? parts[5] + "=" + parts[6] : "";
-    }).filter(Boolean).join("; ");
-  }
-  return raw.replace(/^cookie:\s*/i, "").replace(/\s+/g, " ").trim();
-}
-
-function cookieLooksSignedIn(cookie) {
-  return /(?:^|;\s*)(?:SID|__Secure-\dPSID|SAPISID|__Secure-\dPAPISID)=/.test(normalizeYouTubeCookie(cookie));
-}
-
-function youtubeCookieValue(cookie, name) {
-  const match = String(cookie || "").match(new RegExp("(?:^|;\\s*)" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)"));
-  return match ? match[1] : "";
-}
-
-async function youtubeAuthHeaders(cookie, signed = false) {
-  const normalized = normalizeYouTubeCookie(cookie);
-  if (!normalized) return {};
-  const headers = { Cookie: normalized };
-  try {
-    const sapisid = youtubeCookieValue(normalized, "SAPISID") || youtubeCookieValue(normalized, "__Secure-3PAPISID");
-    if (signed && sapisid && typeof crypto !== "undefined" && crypto.subtle) {
-      const timestamp = Math.floor(Date.now() / 1000);
-      const text = timestamp + " " + sapisid + " https://www.youtube.com";
-      const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text));
-      const hash = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      headers.Authorization = "SAPISIDHASH " + timestamp + "_" + hash;
-    }
-  } catch {}
-  return headers;
-}
-
-function canonicalWatchUrl(id) {
-  return "https://www.youtube.com/watch?v=" + id;
-}
-
-function videoIdFromUrl(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return "";
-  if (YT_ID_RE.test(raw)) return raw;
-  try {
-    const url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : "https://" + raw);
-    const host = url.hostname.toLowerCase().replace(/^www\./, "");
-    if (host === "youtu.be") {
-      const id = url.pathname.split("/").filter(Boolean)[0] || "";
-      return YT_ID_RE.test(id) ? id : "";
-    }
-    if (host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtube-nocookie.com") {
-      const v = url.searchParams.get("v") || "";
-      if (YT_ID_RE.test(v)) return v;
-      const parts = url.pathname.split("/").filter(Boolean);
-      if (parts.length >= 2 && ["embed", "shorts", "live", "v"].includes(parts[0]) && YT_ID_RE.test(parts[1])) {
-        return parts[1];
-      }
-    }
-  } catch {}
-  const match = raw.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?[^#]*v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/);
-  return match ? match[1] : "";
-}
-
-function parseYouTubeDuration(text) {
-  const parts = String(text || "").trim().split(":").map((part) => Number(part));
-  if (!parts.length || parts.some((part) => !Number.isFinite(part))) return 0;
-  return parts.reduce((total, part) => total * 60 + part, 0);
-}
-
-function youTubeText(node) {
-  if (!node) return "";
-  if (typeof node === "string") return node;
-  if (typeof node.simpleText === "string") return node.simpleText;
-  if (Array.isArray(node.runs)) return node.runs.map((run) => run?.text || "").join("");
-  return "";
-}
-
-function jsonObjectAfter(text, marker) {
-  const markerAt = text.indexOf(marker);
-  if (markerAt < 0) return null;
-  const start = text.indexOf("{", markerAt);
-  if (start < 0) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-    } else if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return null;
-}
-
-function extractYouTubeInitialData(html) {
-  const markers = ["var ytInitialData", "ytInitialData =", 'window["ytInitialData"]', "ytInitialData"];
-  for (const marker of markers) {
-    const raw = jsonObjectAfter(html, marker);
-    if (!raw) continue;
-    try { return JSON.parse(raw); } catch {}
-  }
-  return null;
-}
-
-function walkYouTubeObjects(root, key, out = []) {
-  if (!root || typeof root !== "object") return out;
-  if (root[key]) out.push(root[key]);
-  for (const child of Object.keys(root)) {
-    if (child === key) continue;
-    walkYouTubeObjects(root[child], key, out);
-  }
-  return out;
-}
-
-function normalizeYouTubeVideo(renderer) {
-  if (!renderer || !YT_ID_RE.test(String(renderer.videoId || ""))) return null;
-  const id = renderer.videoId;
-  const title = youTubeText(renderer.title) || youTubeText(renderer.headline) || "Untitled";
-  const rawArtist = youTubeText(renderer.ownerText)
-    || youTubeText(renderer.longBylineText)
-    || youTubeText(renderer.shortBylineText)
-    || "YouTube";
-  const thumbs = renderer.thumbnail?.thumbnails || [];
-  const thumbnail = thumbs.length
-    ? thumbs[thumbs.length - 1].url
-    : "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg";
-  return {
-    id,
-    title: String(title).trim() || "Untitled",
-    artist: String(rawArtist).replace(/\s*-\s*Topic$/i, "").trim() || "YouTube",
-    duration: parseYouTubeDuration(youTubeText(renderer.lengthText)),
-    thumbnail,
-    url: canonicalWatchUrl(id),
-  };
-}
-
-function parseYouTubeSearchData(data) {
-  const renderers = walkYouTubeObjects(data, "videoRenderer");
-  const seen = new Set();
-  const items = [];
-  for (const renderer of renderers) {
-    const track = normalizeYouTubeVideo(renderer);
-    if (!track || seen.has(track.id)) continue;
-    seen.add(track.id);
-    items.push(track);
-    if (items.length >= 20) break;
-  }
-  return items;
-}
-
-function bdNetFetch() {
-  try {
-    if (typeof BdApi !== "undefined" && BdApi.Net && typeof BdApi.Net.fetch === "function") {
-      return BdApi.Net.fetch.bind(BdApi.Net);
-    }
-  } catch {}
-  return typeof fetch === "function" ? fetch.bind(globalThis) : null;
-}
-
-async function netFetchText(url, headers = {}, options = {}) {
-  const fetcher = bdNetFetch();
-  if (!fetcher) throw new Error("network is unavailable");
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), options.timeout || 15000) : 0;
-  try {
-    const init = {
-      ...options,
-      headers: { "Accept-Language": "en-US,en;q=0.9", ...headers },
-      ...(controller ? { signal: controller.signal } : {}),
-    };
-    const res = await fetcher(url, init);
-    if (!res || !res.ok) throw new Error("YouTube HTTP " + (res?.status || "?"));
-    return await res.text();
-  } catch (e) {
-    if (e?.name === "AbortError") throw new Error("YouTube request timed out");
-    throw e;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function netFetchBuffer(url, headers = {}, options = {}) {
-  const fetcher = bdNetFetch();
-  if (!fetcher) throw new Error("network is unavailable");
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), options.timeout || 30000) : 0;
-  try {
-    const init = {
-      ...options,
-      headers: { Accept: "*/*", ...headers },
-      ...(controller ? { signal: controller.signal } : {}),
-    };
-    const res = await fetcher(url, init);
-    if (!res || !res.ok) throw new Error("audio HTTP " + (res?.status || "?"));
-    if (typeof res.arrayBuffer === "function") return await res.arrayBuffer();
-    if (typeof res.blob === "function") return await (await res.blob()).arrayBuffer();
-    throw new Error("audio response has no binary reader");
-  } catch (e) {
-    if (e?.name === "AbortError") throw new Error("audio request timed out");
-    throw e;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function getYouTubeVisitorData(id, cookie = "") {
-  const authKey = normalizeYouTubeCookie(cookie) ? "auth" : "anon";
-  if (visitorCache.value && visitorCache.auth === authKey && Date.now() - visitorCache.at < 30 * 60 * 1000) return visitorCache.value;
-  const auth = await youtubeAuthHeaders(cookie);
-  const url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id) + "&hl=en&gl=US";
-  let html = "";
-  try {
-    html = await netFetchText(url, {
-      ...auth,
-      "Accept-Language": "en-US,en;q=0.9",
-      "User-Agent": YT_WEB_UA,
-      "Cookie": [auth.Cookie, "CONSENT=YES+1"].filter(Boolean).join("; "),
-    });
-  } catch {
-    html = await netFetchText(url, auth);
-  }
-  let match = html.match(/visitorData":"([^"]+)"/);
-  if (!match) {
-    try {
-      const home = await netFetchText("https://www.youtube.com/?hl=en&gl=US", auth);
-      match = home.match(/visitorData":"([^"]+)"/);
-    } catch {}
-  }
-  if (!match) throw new Error("YouTube did not provide visitorData");
-  visitorCache = { value: match[1], at: Date.now(), auth: authKey };
-  return match[1];
-}
-
-async function resolveAudioStream(id, cookie = "") {
-  const videoId = videoIdFromUrl(id);
-  if (!videoId) throw new Error("not a YouTube video URL or id");
-  const auth = await youtubeAuthHeaders(cookie);
-  const visitorData = await getYouTubeVisitorData(videoId, cookie);
-  const payload = {
-    context: { client: { ...YT_VISIONOS_CONTEXT, visitorData } },
-    videoId,
-    contentCheckOk: true,
-    racyCheckOk: true,
-  };
-  const playerUrl = "https://www.youtube.com/youtubei/v1/player?key=" + YT_INNERTUBE_KEY;
-  const playerOptions = { method: "POST", body: JSON.stringify(payload) };
-  const postPlayer = async (headers) => {
-    try {
-      return await netFetchText(playerUrl, {
-        ...headers,
-        "Content-Type": "application/json",
-        "User-Agent": YT_VISIONOS_UA,
-        "X-Goog-Visitor-Id": visitorData,
-        "X-Goog-Api-Format-Version": "2",
-      }, playerOptions);
-    } catch {
-      return await netFetchText(playerUrl, {
-        ...headers,
-        "Content-Type": "application/json",
-        "X-Goog-Visitor-Id": visitorData,
-      }, playerOptions);
-    }
-  };
-  const parsePlayer = (text) => {
-    try { return JSON.parse(text); } catch { throw new Error("YouTube player returned invalid JSON"); }
-  };
-  let data = parsePlayer(await postPlayer(auth));
-  let status = data?.playabilityStatus?.status;
-  if (status === "LOGIN_REQUIRED" && normalizeYouTubeCookie(cookie)) {
-    const signed = await youtubeAuthHeaders(cookie, true);
-    if (signed.Authorization) {
-      data = parsePlayer(await postPlayer(signed));
-      status = data?.playabilityStatus?.status;
-    }
-  }
-  if (status !== "OK") {
-    if (status === "LOGIN_REQUIRED") visitorCache = { value: "", at: 0, auth: "" };
-    throw new Error("YouTube stream " + (status || "failed") + ": " + (data?.playabilityStatus?.reason || "unavailable"));
-  }
-  const formats = Array.isArray(data?.streamingData?.adaptiveFormats) ? data.streamingData.adaptiveFormats : [];
-  const audio = formats.filter((format) => String(format?.mimeType || "").startsWith("audio/") && format?.url);
-  const chosen = audio.find((format) => Number(format.itag) === 140)
-    || audio.find((format) => Number(format.itag) === 251)
-    || audio.find((format) => Number(format.itag) === 139)
-    || audio[0];
-  if (!chosen) throw new Error("YouTube did not return an audio stream");
-  return {
-    url: chosen.url,
-    mimeType: chosen.mimeType || "audio/mp4",
-    contentLength: Number(chosen.contentLength) || 0,
-    itag: Number(chosen.itag) || 0,
-  };
-}
-
-async function verifyYouTubeLogin(cookie) {
-  if (!normalizeYouTubeCookie(cookie)) return { ok: false, error: "no Cookie header saved" };
-  const auth = await youtubeAuthHeaders(cookie);
-  const payload = {
-    context: {
-      client: {
-        clientName: "WEB",
-        clientVersion: "2.20241010.00.00",
-        hl: "en",
-        gl: "US",
-      },
-    },
-    deviceTheme: "USER_INTERFACE_THEME_DARK",
-  };
-  try {
-    const text = await netFetchText(
-      "https://www.youtube.com/youtubei/v1/account/account_menu?key=" + YT_INNERTUBE_KEY + "&prettyPrint=false",
-      { ...auth, "Content-Type": "application/json", "X-Goog-Api-Format-Version": "2" },
-      { method: "POST", body: JSON.stringify(payload) }
-    );
-    const data = JSON.parse(text);
-    const names = [
-      ...walkYouTubeObjects(data, "accountName"),
-      ...walkYouTubeObjects(data, "email"),
-    ].map(youTubeText).filter(Boolean);
-    if (names.length) return { ok: true, name: String(names[0]).trim() };
-    return { ok: false, error: "cookie is not signed in" };
-  } catch {
-    return { ok: false, error: "login check failed" };
-  }
-}
-
-async function searchYouTube(query) {
-  const q = String(query || "").trim();
-  if (!q) return { items: [] };
-  const url = "https://www.youtube.com/results?search_query=" + encodeURIComponent(q) + "&hl=en&gl=US";
-  const html = await netFetchText(url);
-  const visitor = html.match(/visitorData":"([^"]+)"/);
-  if (visitor) visitorCache = { value: visitor[1], at: Date.now(), auth: "anon" };
-  const data = extractYouTubeInitialData(html);
-  if (!data) throw new Error("YouTube returned a consent or captcha page. Paste a video URL instead.");
-  const items = parseYouTubeSearchData(data);
-  if (!items.length) throw new Error("No YouTube results. Paste a video URL instead.");
-  return { items };
-}
-
-async function resolveYouTubeTrack(input) {
-  const id = videoIdFromUrl(input);
-  if (!id) throw new Error("not a YouTube video URL or id");
-  let meta = {};
-  try {
-    const text = await netFetchText("https://www.youtube.com/oembed?url=" + encodeURIComponent(canonicalWatchUrl(id)) + "&format=json");
-    meta = JSON.parse(text);
-  } catch {}
-  return {
-    id,
-    title: meta.title || ("YouTube video " + id),
-    artist: String(meta.author_name || "YouTube").replace(/\s*-\s*Topic$/i, "").trim() || "YouTube",
-    duration: 0,
-    thumbnail: meta.thumbnail_url || ("https://i.ytimg.com/vi/" + id + "/hqdefault.jpg"),
-    url: canonicalWatchUrl(id),
-  };
-}
-
-class LocalQueue {
-  constructor() {
-    this.items = [];
-    this.index = -1;
-    this.repeat = "off";
-    this.shuffle = false;
-  }
-
-  current() {
-    return this.items[this.index] || null;
-  }
-
-  replace(track) {
-    this.items = track ? [track] : [];
-    this.index = track ? 0 : -1;
-  }
-
-  add(track) {
-    if (!track) return;
-    this.items.push(track);
-    if (this.index < 0) this.index = 0;
-  }
-
-  select(index) {
-    const i = Number(index);
-    if (!Number.isInteger(i) || i < 0 || i >= this.items.length) return null;
-    this.index = i;
-    return this.current();
-  }
-
-  remove(index) {
-    const i = Number(index);
-    if (!Number.isInteger(i) || i < 0 || i >= this.items.length) return null;
-    const removed = this.items.splice(i, 1)[0] || null;
-    if (!this.items.length) this.index = -1;
-    else if (i < this.index) this.index--;
-    else if (i === this.index) this.index = Math.min(this.index, this.items.length - 1);
-    return removed;
-  }
-
-  next(auto = false) {
-    if (!this.items.length) return null;
-    if (auto && this.repeat === "one") return this.current();
-    if (this.index + 1 < this.items.length) {
-      this.index++;
-      return this.current();
-    }
-    if (this.repeat === "all") {
-      this.index = 0;
-      return this.current();
-    }
-    return null;
-  }
-
-  previous() {
-    if (!this.items.length) return null;
-    if (this.index > 0) {
-      this.index--;
-      return this.current();
-    }
-    if (this.repeat === "all") {
-      this.index = this.items.length - 1;
-      return this.current();
-    }
-    return null;
-  }
-
-  shuffleUpcoming() {
-    this.shuffle = !this.shuffle;
-    if (!this.items.length) return;
-    const current = this.current();
-    const rest = this.items.filter((_, i) => i !== this.index);
-    for (let i = rest.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [rest[i], rest[j]] = [rest[j], rest[i]];
-    }
-    this.items = current ? [current, ...rest] : rest;
-    this.index = current ? 0 : (this.items.length ? 0 : -1);
-  }
-
-  clear() {
-    this.items = [];
-    this.index = -1;
-  }
-}
-
-class YouTubeEngine {
-  constructor(plugin) {
-    this.plugin = plugin;
-    this.queue = new LocalQueue();
-    this.track = null;
-    this.isPlaying = false;
-    this.position = 0;
-    this.duration = 0;
-    this.volume = Math.max(0, Math.min(100, Number(plugin.settings.volume) || 70));
-    this.blocked = false;
-    this.videoVisible = false;
-    this.error = "";
-    this.mode = "none";
-    this.loading = false;
-    this.streamError = "";
-    this._iframe = null;
-    this._host = null;
-    this._audio = null;
-    this._audioUrl = "";
-    this._streamToken = 0;
-    this._listener = null;
-    this._loadTimer = 0;
-    this._listenTimer = 0;
-    this._autoplayTimer = 0;
-    this._muteTimer = 0;
-    this._notifyTimer = 0;
-    this._volumeSent = false;
-    this._ending = false;
-    this._playerId = Math.floor(Math.random() * 1000000) + 1;
-    this._ready = false;
-    this._started = false;
-    this._muted = false;
-    this._gotInfo = false;
-  }
-
-  start() {
-    if (this._listener) return;
-    this._listener = (event) => this.onMessage(event);
-    window.addEventListener("message", this._listener);
-  }
-
-  destroy() {
-    try { if (this._listener) window.removeEventListener("message", this._listener); } catch {}
-    this._listener = null;
-    clearTimeout(this._loadTimer);
-    clearInterval(this._listenTimer);
-    clearTimeout(this._autoplayTimer);
-    clearTimeout(this._muteTimer);
-    clearTimeout(this._notifyTimer);
-    this._loadTimer = 0;
-    this._listenTimer = 0;
-    this._autoplayTimer = 0;
-    this._muteTimer = 0;
-    this._notifyTimer = 0;
-    this._streamToken++;
-    this.mode = "none";
-    this.clearAudio();
-    try { this._iframe?.remove(); } catch {}
-    try { this._host?.remove(); } catch {}
-    try { this._audio?.remove(); } catch {}
-    this._iframe = null;
-    this._host = null;
-    this._audio = null;
-    this.videoVisible = false;
-  }
-
-  ensureHost() {
-    if (this._host && document.body.contains(this._host)) return this._host;
-    try { document.querySelectorAll("#youtubepanel-audio-host").forEach((el) => el.remove()); } catch {}
-    const host = document.createElement("div");
-    host.id = "youtubepanel-audio-host";
-    host.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:0;";
-    document.body.appendChild(host);
-    this._host = host;
-    return host;
-  }
-
-  ensureIframe() {
-    if (this._iframe && this._iframe.isConnected) return this._iframe;
-    const host = this.ensureHost();
-    const iframe = document.createElement("iframe");
-    iframe.id = "youtubepanel-player";
-    iframe.title = "YouTube player";
-    iframe.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
-    iframe.setAttribute("allowfullscreen", "true");
-    iframe.style.cssText = "width:100%;height:100%;border:0;background:#000;";
-    iframe.addEventListener("load", () => this.beginListening());
-    host.appendChild(iframe);
-    this._iframe = iframe;
-    return iframe;
-  }
-
-  post(func, args = []) {
-    try {
-      this._iframe?.contentWindow?.postMessage(
-        JSON.stringify({ event: "command", func, args, id: this._playerId, channel: "widget" }),
-        "https://www.youtube.com"
-      );
-    } catch {}
-  }
-
-  beginListening() {
-    clearInterval(this._listenTimer);
-    const listen = () => {
-      if (this._ready || !this._iframe?.contentWindow) return;
-      try {
-        this._iframe.contentWindow.postMessage(
-          JSON.stringify({ event: "listening", id: this._playerId, channel: "widget" }),
-          "https://www.youtube.com"
-        );
-      } catch {}
-    };
-    listen();
-    this._listenTimer = setInterval(listen, 250);
-  }
-
-  notify() {
-    if (this._notifyTimer) return;
-    this._notifyTimer = setTimeout(() => {
-      this._notifyTimer = 0;
-      this.plugin._bump?.();
-    }, 120);
-  }
-
-  snapshot() {
-    return {
-      track: this.track,
-      isPlaying: this.isPlaying,
-      position: this.position,
-      duration: this.duration,
-      volume: this.volume,
-      shuffle: this.queue.shuffle,
-      repeat: this.queue.repeat,
-      blocked: this.blocked,
-      muted: this._muted,
-      gotInfo: this._gotInfo,
-      mode: this.mode,
-      loading: this.loading,
-      streamError: this.streamError,
-      videoVisible: this.videoVisible,
-      error: this.error,
-      queue: {
-        items: this.queue.items.slice(),
-        index: this.queue.index,
-        upcoming: this.queue.index >= 0 ? this.queue.items.slice(this.queue.index + 1) : [],
-      },
-    };
-  }
-
-  setVideoVisible(visible) {
-    this.videoVisible = !!visible;
-    if (!this._host) {
-      this.notify();
-      return;
-    }
-    if (this.videoVisible) {
-      this.post("unMute");
-      this.post("setVolume", [this.volume]);
-      this._host.style.cssText = "position:fixed;right:16px;bottom:16px;width:320px;height:180px;overflow:hidden;opacity:1;pointer-events:auto;z-index:9999;box-shadow:0 8px 28px rgba(0,0,0,0.65);border:1px solid rgba(255,255,255,0.15);";
-    } else {
-      this._host.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:0;";
-    }
-    this.notify();
-  }
-
-  unmuteNow() {
-    if (this.mode === "stream") {
-      try {
-        this._audio.muted = false;
-        this._audio.volume = this.volume / 100;
-        const played = this._audio.play();
-        if (played && typeof played.catch === "function") {
-          played.catch(() => { this.blocked = true; this.notify(); });
-        }
-      } catch {}
-      this.blocked = false;
-      this.notify();
-      return;
-    }
-    this.post("unMute");
-    this.post("setVolume", [this.volume]);
-    this.blocked = false;
-    this.notify();
-  }
-
-  enableSound() {
-    if (this.mode === "stream") {
-      this.unmuteNow();
-      return;
-    }
-    this.unmuteNow();
-    clearTimeout(this._muteTimer);
-    this._muteTimer = setTimeout(() => {
-      if (!this._muted) return;
-      this.setVideoVisible(true);
-      this.blocked = true;
-      this.notify();
-    }, 1200);
-  }
-
-  retryStream() {
-    visitorCache = { value: "", at: 0, auth: "" };
-    if (!this.track) return this.snapshot();
-    this.plugin.settings.audioSource = "auto";
-    this.plugin.save();
-    this.load(this.track);
-    return this.snapshot();
-  }
-
-  ensureAudio() {
-    if (this._audio) return this._audio;
-    const audio = document.createElement("audio");
-    audio.preload = "auto";
-    audio.style.cssText = "display:none;";
-    audio.addEventListener("loadedmetadata", () => {
-      if (this.mode !== "stream") return;
-      if (Number.isFinite(audio.duration) && audio.duration > 0) this.duration = audio.duration;
-      this.notify();
-    });
-    audio.addEventListener("timeupdate", () => {
-      if (this.mode !== "stream") return;
-      this.position = Number(audio.currentTime) || 0;
-      if (Number.isFinite(audio.duration) && audio.duration > 0) this.duration = audio.duration;
-      this.notify();
-    });
-    audio.addEventListener("play", () => {
-      if (this.mode !== "stream") return;
-      this.isPlaying = true;
-      this.blocked = false;
-      this.notify();
-    });
-    audio.addEventListener("pause", () => {
-      if (this.mode !== "stream" || audio.ended) return;
-      this.isPlaying = false;
-      this.notify();
-    });
-    audio.addEventListener("ended", () => {
-      if (this.mode !== "stream") return;
-      this.isPlaying = false;
-      this.handleEnded();
-    });
-    audio.addEventListener("error", () => {
-      if (this.mode !== "stream") return;
-      this.error = "Audio stream failed.";
-      this.isPlaying = false;
-      this.notify();
-    });
-    document.body.appendChild(audio);
-    this._audio = audio;
-    return audio;
-  }
-
-  clearAudio() {
-    if (this._audio) {
-      try { this._audio.pause(); } catch {}
-      try { this._audio.removeAttribute("src"); } catch {}
-      try { this._audio.load(); } catch {}
-    }
-    if (this._audioUrl) {
-      try { URL.revokeObjectURL(this._audioUrl); } catch {}
-      this._audioUrl = "";
-    }
-  }
-
-  async startStream(track, token) {
-    this.mode = "loading";
-    this.loading = true;
-    this.streamError = "";
-    this.notify();
-    try {
-      const stream = await resolveAudioStream(track.id, this.plugin.settings.youtubeCookie);
-      if (token !== this._streamToken) return;
-      const buffer = await netFetchBuffer(stream.url, { "User-Agent": YT_VISIONOS_UA });
-      if (token !== this._streamToken) return;
-      const blob = new Blob([buffer], { type: stream.mimeType });
-      const audioUrl = URL.createObjectURL(blob);
-      this.clearAudio();
-      this._audioUrl = audioUrl;
-      const audio = this.ensureAudio();
-      audio.src = audioUrl;
-      audio.volume = this.volume / 100;
-      audio.muted = false;
-      this.mode = "stream";
-      this.loading = false;
-      this.isPlaying = true;
-      this.blocked = false;
-      this.error = "";
-      this.notify();
-      const played = audio.play();
-      if (played && typeof played.catch === "function") {
-        played.catch(() => {
-          this.blocked = true;
-          this.notify();
-        });
-      }
-    } catch (e) {
-      if (token !== this._streamToken) return;
-      this.loading = false;
-      this.streamError = e?.message || "stream extraction failed";
-      this.mode = "none";
-      this.notify();
-      this.loadEmbed(track);
-    }
-  }
-
-  load(track) {
-    if (!track?.id) throw new Error("not a playable YouTube track");
-    this.track = track;
-    this.position = 0;
-    this.duration = Number(track.duration) || 0;
-    this.isPlaying = true;
-    this.blocked = false;
-    this.error = "";
-    this.streamError = "";
-    this.loading = false;
-    this.mode = "none";
-    this._muted = false;
-    this._gotInfo = false;
-    this._streamToken++;
-    this.videoVisible = false;
-    if (this._host) {
-      this._host.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:0;";
-    }
-    this.clearAudio();
-    if (this._iframe) {
-      try { this._iframe.src = "about:blank"; } catch {}
-    }
-    const source = String(this.plugin.settings.audioSource || "auto");
-    if (source === "embed") {
-      this.loadEmbed(track);
-      return;
-    }
-    this.startStream(track, this._streamToken);
-  }
-
-  loadEmbed(track) {
-    if (!track?.id) throw new Error("not a playable YouTube track");
-    this.track = track;
-    this.position = 0;
-    this.duration = Number(track.duration) || 0;
-    this.isPlaying = true;
-    this.blocked = false;
-    this.error = "";
-    this._volumeSent = false;
-    this._ready = false;
-    this._started = false;
-    this._muted = true;
-    this._gotInfo = false;
-    this._ending = false;
-    this.mode = "embed";
-    this.loading = false;
-    clearTimeout(this._loadTimer);
-    clearTimeout(this._autoplayTimer);
-    clearTimeout(this._muteTimer);
-    this._muteTimer = 0;
-    const iframe = this.ensureIframe();
-    const origin = (typeof location !== "undefined" && location.origin && location.origin !== "null")
-      ? location.origin
-      : "";
-    const params = new URLSearchParams({
-      autoplay: "1",
-      enablejsapi: "1",
-      playsinline: "1",
-      rel: "0",
-      hl: "en",
-      mute: "1",
-      ...(origin ? { origin, widget_referrer: location.href } : {}),
-    });
-    iframe.src = "https://www.youtube.com/embed/" + encodeURIComponent(track.id) + "?" + params.toString();
-    this.beginListening();
-    this._loadTimer = setTimeout(() => {
-      if (this._volumeSent) return;
-      clearInterval(this._listenTimer);
-      this._listenTimer = 0;
-      this.blocked = true;
-      this.notify();
-    }, 4500);
-    this._autoplayTimer = setTimeout(() => {
-      if (this._started || this.error || !this.track) return;
-      this.blocked = true;
-      this.notify();
-    }, 4500);
-    this.notify();
-  }
-
-  onMessage(event) {
-    if (!this._iframe || event.source !== this._iframe.contentWindow) return;
-    if (event.origin !== "https://www.youtube.com") return;
-    if (this.mode !== "embed") return;
-    let data = event.data;
-    if (typeof data === "string") {
-      try { data = JSON.parse(data); } catch { return; }
-    }
-    if (!data) return;
-    if (data.event === "onError") {
-      const code = Number(data.info);
-      clearTimeout(this._loadTimer);
-      clearInterval(this._listenTimer);
-      clearTimeout(this._autoplayTimer);
-      clearTimeout(this._muteTimer);
-      this._loadTimer = 0;
-      this._listenTimer = 0;
-      this._autoplayTimer = 0;
-      this._muteTimer = 0;
-      this.isPlaying = false;
-      this.blocked = false;
-      this._muted = false;
-      this.error = (code === 101 || code === 150)
-        ? "The video owner does not allow embedded playback. Use Open on YouTube."
-        : "YouTube player error " + (Number.isFinite(code) ? code : "unknown") + ".";
-      this.notify();
-      return;
-    }
-    if (data.event === "initialDelivery") {
-      this._ready = true;
-      clearInterval(this._listenTimer);
-      this._listenTimer = 0;
-    } else if (data.event === "infoDelivery") {
-      this._ready = true;
-      clearInterval(this._listenTimer);
-      this._listenTimer = 0;
-    } else if (data.event === "onReady" || data.event === "alreadyInitialized") {
-      this._ready = true;
-      clearInterval(this._listenTimer);
-      this._listenTimer = 0;
-    } else {
-      return;
-    }
-    const hasInfo = data.event === "initialDelivery" || data.event === "infoDelivery";
-    if (!hasInfo) {
-      this.notify();
-      return;
-    }
-    this._gotInfo = true;
-    const info = data.info || {};
-    if (typeof info.muted === "boolean") {
-      this._muted = info.muted;
-      if (!info.muted) {
-        clearTimeout(this._muteTimer);
-        this._muteTimer = 0;
-        this.blocked = false;
-      }
-    }
-    if (info.videoData && info.videoData.isPlayable === false) {
-      clearTimeout(this._loadTimer);
-      clearInterval(this._listenTimer);
-      clearTimeout(this._autoplayTimer);
-      clearTimeout(this._muteTimer);
-      this._loadTimer = 0;
-      this._listenTimer = 0;
-      this._autoplayTimer = 0;
-      this._muteTimer = 0;
-      this.isPlaying = false;
-      this.error = "YouTube cannot play this video here. Use Open on YouTube.";
-      this.notify();
-      return;
-    }
-    if (typeof info.currentTime === "number" && Number.isFinite(info.currentTime)) this.position = info.currentTime;
-    if (typeof info.duration === "number" && Number.isFinite(info.duration) && info.duration > 0) this.duration = info.duration;
-    if (typeof info.playerState === "number") {
-      if (info.playerState === 1 || info.playerState === 3) {
-        this._started = true;
-        clearTimeout(this._autoplayTimer);
-        this._autoplayTimer = 0;
-      }
-      if (info.playerState === 1) {
-        this.isPlaying = true;
-        this.blocked = false;
-      } else if (info.playerState === 2) {
-        this.isPlaying = false;
-      } else if (info.playerState === 0) {
-        this.isPlaying = false;
-        if (!this._ending) {
-          this._ending = true;
-          setTimeout(() => this.handleEnded(), 0);
-        }
-      }
-    }
-    if (!this._volumeSent) {
-      this._volumeSent = true;
-      clearTimeout(this._loadTimer);
-      this._loadTimer = 0;
-      this.blocked = false;
-      this.post("unMute");
-      this.post("setVolume", [this.volume]);
-      clearTimeout(this._muteTimer);
-      this._muteTimer = setTimeout(() => {
-        if (this._muted) {
-          this.blocked = true;
-          this.notify();
-        }
-      }, 2000);
-    }
-    this.notify();
-  }
-
-  handleEnded() {
-    this._ending = false;
-    if (!this.track) return;
-    if (this.queue.repeat === "one") {
-      this.position = 0;
-      if (this.mode === "stream") {
-        this.seek(0);
-        this.resume();
-      } else {
-        this.post("seekTo", [0, true]);
-        this.post("playVideo");
-      }
-      this.isPlaying = true;
-      this.notify();
-      return;
-    }
-    const next = this.queue.next(true);
-    if (next && next.id !== this.track.id) {
-      this.load(next);
-    } else if (next) {
-      this.position = 0;
-      if (this.mode === "stream") {
-        this.seek(0);
-        this.resume();
-      } else {
-        this.post("seekTo", [0, true]);
-        this.post("playVideo");
-      }
-      this.isPlaying = true;
-      this.notify();
-    } else {
-      this.isPlaying = false;
-      this.position = this.duration;
-      this.notify();
-    }
-  }
-
-  async play(input) {
-    const source = input?.url || input;
-    const id = input?.id || videoIdFromUrl(source);
-    if (!id) throw new Error("not a YouTube video URL or id");
-    if (input?.id) {
-      this.queue.replace(input);
-      this.load(input);
-      return this.snapshot();
-    }
-    // Load the iframe inside the click gesture; resolve title/artist afterward.
-    const placeholder = {
-      id,
-      title: "Loading YouTube video...",
-      artist: "YouTube",
-      duration: 0,
-      thumbnail: "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg",
-      url: canonicalWatchUrl(id),
-    };
-    this.queue.replace(placeholder);
-    this.load(placeholder);
-    resolveYouTubeTrack(id).then((track) => {
-      if (this.track?.id !== id) return;
-      this.track = track;
-      if (this.queue.items[this.queue.index]?.id === id) this.queue.items[this.queue.index] = track;
-      if (!this.duration && track.duration) this.duration = track.duration;
-      this.notify();
-    }).catch(() => {
-      if (this.track?.id !== id || this.track.title !== "Loading YouTube video...") return;
-      const fallback = { ...placeholder, title: "YouTube video " + id };
-      this.track = fallback;
-      if (this.queue.items[this.queue.index]?.id === id) this.queue.items[this.queue.index] = fallback;
-      this.notify();
-    });
-    return this.snapshot();
-  }
-
-  async add(input) {
-    const track = input && input.id ? input : await resolveYouTubeTrack(input?.url || input);
-    this.queue.add(track);
-    if (!this.track) this.load(track);
-    else this.notify();
-    return this.snapshot();
-  }
-
-  pause() {
-    if (this.mode === "stream") {
-      try { this._audio.pause(); } catch {}
-    } else {
-      this.post("pauseVideo");
-    }
-    clearTimeout(this._autoplayTimer);
-    this._autoplayTimer = 0;
-    this.blocked = false;
-    this.isPlaying = false;
-    this.notify();
-    return this.snapshot();
-  }
-
-  resume() {
-    if (!this.track) return this.snapshot();
-    if (this.mode === "stream") {
-      try {
-        const played = this._audio.play();
-        if (played && typeof played.catch === "function") {
-          played.catch(() => {
-            this.blocked = true;
-            this.notify();
-          });
-        }
-      } catch {}
-      this.blocked = false;
-      this.notify();
-      return this.snapshot();
-    }
-    if (!this._volumeSent) this.load(this.track);
-    else {
-      this.post("playVideo");
-      this.isPlaying = true;
-    }
-    this.blocked = false;
-    this.notify();
-    return this.snapshot();
-  }
-
-  seek(seconds) {
-    const value = Math.max(0, Math.min(Number(seconds) || 0, this.duration || Number(seconds) || 0));
-    this.position = value;
-    if (this.mode === "stream") {
-      try { this._audio.currentTime = value; } catch {}
-    } else {
-      this.post("seekTo", [value, true]);
-    }
-    this.notify();
-    return this.snapshot();
-  }
-
-  setVolume(percent) {
-    const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
-    this.volume = value;
-    if (this.mode === "stream") {
-      try { this._audio.volume = value / 100; } catch {}
-    } else {
-      this.post("setVolume", [value]);
-    }
-    this.notify();
-    return this.snapshot();
-  }
-
-  stop() {
-    this._streamToken++;
-    this.loading = false;
-    if (this.mode === "loading") this.mode = "none";
-    if (this.mode === "stream") {
-      try { this._audio.pause(); this._audio.currentTime = 0; } catch {}
-    } else {
-      this.post("stopVideo");
-    }
-    clearTimeout(this._autoplayTimer);
-    clearTimeout(this._muteTimer);
-    this._autoplayTimer = 0;
-    this._muteTimer = 0;
-    this._started = false;
-    this._muted = false;
-    this.isPlaying = false;
-    this.position = 0;
-    this._volumeSent = false;
-    this.notify();
-    return this.snapshot();
-  }
-
-  clearQueue() {
-    this._streamToken++;
-    this.clearAudio();
-    this.mode = "none";
-    this.loading = false;
-    clearTimeout(this._autoplayTimer);
-    clearTimeout(this._muteTimer);
-    this._autoplayTimer = 0;
-    this._muteTimer = 0;
-    this._started = false;
-    this._muted = false;
-    this.error = "";
-    this.blocked = false;
-    this.videoVisible = false;
-    if (this._host) {
-      this._host.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:0;";
-    }
-    this.queue.clear();
-    this.track = null;
-    this.isPlaying = false;
-    this.position = 0;
-    this.duration = 0;
-    this._volumeSent = false;
-    if (this._iframe) this._iframe.src = "about:blank";
-    this.notify();
-    return this.snapshot();
-  }
-
-  next() {
-    const next = this.queue.next(false);
-    if (next) this.load(next);
-    else this.stop();
-    return this.snapshot();
-  }
-
-  previous() {
-    if (this.position > 3) {
-      this.seek(0);
-      return this.snapshot();
-    }
-    const prev = this.queue.previous();
-    if (prev) this.load(prev);
-    else this.seek(0);
-    return this.snapshot();
-  }
-
-  jump(index) {
-    const track = this.queue.select(index);
-    if (track) this.load(track);
-    return this.snapshot();
-  }
-
-  remove(index) {
-    const removed = this.queue.remove(index);
-    if (removed && removed.id === this.track?.id) {
-      const current = this.queue.current();
-      if (current) this.load(current);
-      else this.clearQueue();
-    } else {
-      this.notify();
-    }
-    return this.snapshot();
-  }
-
-  repeat(state) {
-    if (state) this.queue.repeat = state;
-    else this.queue.repeat = this.queue.repeat === "off" ? "all" : (this.queue.repeat === "all" ? "one" : "off");
-    this.notify();
-    return this.snapshot();
-  }
-
-  shuffle() {
-    this.queue.shuffleUpcoming();
-    this.notify();
-    return this.snapshot();
-  }
-}
-
 // ------------------------------------------------------------------- plugin
 class YouTubePanel {
   constructor(meta) {
@@ -1550,21 +322,11 @@ class YouTubePanel {
     this.settings = { ...DEFAULT_SETTINGS, ...(this.bd.Data.load("settings") || {}) };
     // v0.1.1: move the previous Alt+Y default to Alt+Q. A custom binding is
     // left alone unless it is exactly the old default.
-    let dirty = false;
     const hk = Array.isArray(this.settings.hotkey) ? this.settings.hotkey : [];
     if (hk.length === 2 && String(hk[0]).toLowerCase() === "alt" && String(hk[1]).toLowerCase() === "y") {
       this.settings.hotkey = ["Alt", "q"];
-      dirty = true;
+      this.save();
     }
-    for (const key of ["sidecarUrl", "sidecarToken"]) {
-      if (Object.prototype.hasOwnProperty.call(this.settings, key)) {
-        delete this.settings[key];
-        dirty = true;
-      }
-    }
-    if (dirty) this.save();
-    this.engine = new YouTubeEngine(this);
-    this._searchCache = new Map();
     this._bump = null;
     this._reactRoot = null;
     this._rootEl = null;
@@ -1581,47 +343,44 @@ class YouTubePanel {
     try { this.bd.Data.save("settings", this.settings); } catch {}
   }
 
-  // ------------------------------------------------------- local playback
-  state() { return this.engine.snapshot(); }
-  setYouTubeCookie(value) {
-    this.settings.youtubeCookie = normalizeYouTubeCookie(value);
-    visitorCache = { value: "", at: 0, auth: "" };
-    this.save();
-    return this.settings.youtubeCookie;
+  // ------------------------------------------------------------- sidecar API
+  async api(path, options = {}) {
+    const base = String(this.settings.sidecarUrl || DEFAULT_SETTINGS.sidecarUrl).replace(/\/+$/, "");
+    const headers = { "X-Panel-Token": String(this.settings.sidecarToken || DEFAULT_SETTINGS.sidecarToken) };
+    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    let res;
+    try {
+      res = await fetch(base + path, {
+        method: options.method || "GET",
+        headers,
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (e) {
+      throw new Error("sidecar offline at " + base + " - start tools/youtube-sidecar/start-youtube-panel.cmd");
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ("sidecar HTTP " + res.status));
+    return data;
   }
-  clearYouTubeCookie() {
-    this.settings.youtubeCookie = "";
-    visitorCache = { value: "", at: 0, auth: "" };
-    this.save();
-  }
-  verifyYouTubeLogin() { return verifyYouTubeLogin(this.settings.youtubeCookie); }
-  search(q) {
-    const key = String(q || "").trim().toLowerCase();
-    const cached = this._searchCache.get(key);
-    if (cached && Date.now() - cached.at < 120000) return Promise.resolve(cached.value);
-    return searchYouTube(q).then((value) => {
-      this._searchCache.set(key, { at: Date.now(), value });
-      if (this._searchCache.size > 20) {
-        const oldest = this._searchCache.keys().next().value;
-        this._searchCache.delete(oldest);
-      }
-      return value;
-    });
-  }
-  play(input) { return this.engine.play(input); }
-  addQueue(input) { return this.engine.add(input); }
-  removeQueue(index) { return this.engine.remove(index); }
-  jump(index) { return this.engine.jump(index); }
-  pause() { return this.engine.pause(); }
-  resume() { return this.engine.resume(); }
-  next() { return this.engine.next(); }
-  previous() { return this.engine.previous(); }
-  seek(seconds) { return this.engine.seek(seconds); }
-  setVolume(percent) { return this.engine.setVolume(percent); }
-  shuffle() { return this.engine.shuffle(); }
-  repeat(state) { return this.engine.repeat(state); }
-  stop() { return this.engine.stop(); }
-  clearQueue() { return this.engine.clearQueue(); }
+
+  health() { return this.api("/health"); }
+  state() { return this.api("/state"); }
+  search(q) { return this.api("/search?q=" + encodeURIComponent(q)); }
+  play(input) { return this.api("/play", { method: "POST", body: input }); }
+  playPlaylist(url) { return this.api("/playlist", { method: "POST", body: { url } }); }
+  addQueue(input) { return this.api("/queue/add", { method: "POST", body: input }); }
+  removeQueue(index) { return this.api("/queue/remove", { method: "POST", body: { index } }); }
+  jump(index) { return this.api("/jump", { method: "POST", body: { index } }); }
+  pause() { return this.api("/pause", { method: "POST" }); }
+  resume() { return this.api("/resume", { method: "POST" }); }
+  next() { return this.api("/next", { method: "POST" }); }
+  previous() { return this.api("/previous", { method: "POST" }); }
+  seek(seconds) { return this.api("/seek", { method: "POST", body: { seconds } }); }
+  setVolume(percent) { return this.api("/volume", { method: "POST", body: { percent } }); }
+  shuffle() { return this.api("/shuffle", { method: "POST" }); }
+  repeat(state) { return this.api("/repeat", { method: "POST", body: state ? { state } : {} }); }
+  stop() { return this.api("/stop", { method: "POST" }); }
+  clearQueue() { return this.api("/clear", { method: "POST" }); }
 
   // --------------------------------------------------------- discord bridge
   musicBotProfile() {
@@ -1860,7 +619,6 @@ class YouTubePanel {
     this.registerPanel();
     BdApi.DOM.addStyle("YouTubePanel-css", CSS);
     this.startHotkey();
-    this.engine.start();
     if (this.settings.visible) this.hideOtherPanels();
     this.mount();
     this.log("started; visible=" + this.settings.visible);
@@ -1870,7 +628,6 @@ class YouTubePanel {
     this.unregisterPanel();
     try { BdApi.DOM.removeStyle("YouTubePanel-css"); } catch {}
     this.stopHotkey();
-    this.engine.destroy();
     this.unmount();
     this.log("stopped");
   }
@@ -1878,6 +635,20 @@ class YouTubePanel {
   getSettingsPanel() {
     return this.bd.UI.buildSettingsPanel({
       settings: [
+        {
+          type: "textbox",
+          id: "sidecarUrl",
+          name: "Sidecar URL",
+          note: "Run tools/youtube-sidecar/start-youtube-panel.cmd. Default http://127.0.0.1:8910",
+          value: this.settings.sidecarUrl,
+        },
+        {
+          type: "textbox",
+          id: "sidecarToken",
+          name: "Sidecar token",
+          note: "Must match config.json. Default youtube-panel.",
+          value: this.settings.sidecarToken,
+        },
         {
           type: "textbox",
           id: "musicChannelId",
@@ -1905,14 +676,6 @@ class YouTubePanel {
           name: "Command overrides (JSON)",
           note: 'e.g. {"play":"{prefix}play {url}"}. Actions: play, pause, resume, skip, previous, repeat, shuffle, queue, nowPlaying, stop.',
           value: JSON.stringify(this.settings.musicBotCommands || {}),
-        },
-        {
-          type: "dropdown",
-          id: "audioSource",
-          name: "Audio source",
-          note: "Stream extraction also plays label-blocked videos. Embed is the official player.",
-          value: AUDIO_SOURCES.some((source) => source.id === this.settings.audioSource) ? this.settings.audioSource : "auto",
-          options: AUDIO_SOURCES.map((source) => ({ label: source.label, value: source.id })),
         },
         {
           type: "number",
@@ -1944,8 +707,6 @@ class YouTubePanel {
           this.settings.musicBotId = String(value || "jockie");
           this.settings.musicBotPrefix = "";
           this.settings.musicBotCommands = {};
-        } else if (id === "audioSource") {
-          this.settings.audioSource = AUDIO_SOURCES.some((source) => source.id === value) ? value : "auto";
         } else this.settings[id] = value;
         this.save();
         this._bump?.();
@@ -1971,8 +732,8 @@ class Boundary extends React.Component {
 function App({ plugin }) {
   const [, force] = useReducer((x) => x + 1, 0);
   const [state, setState] = useState(null);
+  const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
-  const [engineError, setEngineError] = useState(null);
   const [view, setView] = useState("now");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
@@ -1983,10 +744,8 @@ function App({ plugin }) {
   const [notice, setNotice] = useState("");
   const [volume, setVolume] = useState(Number(plugin.settings.volume) || 70);
   const [channelDraft, setChannelDraft] = useState(String(plugin.settings.musicChannelId || ""));
-  const [cookieDraft, setCookieDraft] = useState("");
-  const [cookieStatus, setCookieStatus] = useState(plugin.settings.youtubeCookie ? "Cookie saved. Test login or play a restricted video." : "Not signed in. Restricted videos fall back to the embed.");
-  const [loginBusy, setLoginBusy] = useState(false);
-  const [showCookie, setShowCookie] = useState(false);
+  const [sidecarDraft, setSidecarDraft] = useState(String(plugin.settings.sidecarUrl || ""));
+  const [tokenDraft, setTokenDraft] = useState(String(plugin.settings.sidecarToken || ""));
   const [showTemplates, setShowTemplates] = useState(false);
   const [botMenuOpen, setBotMenuOpen] = useState(false);
   const [botNotice, setBotNotice] = useState(null);
@@ -2007,9 +766,10 @@ function App({ plugin }) {
       const next = await plugin.state();
       fetchedAt.current = Date.now();
       setState(next);
-      setEngineError(next.error || null);
+      setHealth({ mpv: next.mpv, ytdlp: next.ytdlp, mpvError: next.mpvError });
+      setError(next.mpvError && !next.mpv ? next.mpvError : null);
     } catch (e) {
-      setEngineError(e?.message || "player error");
+      setError(e?.message || "sidecar offline");
     }
   };
 
@@ -2021,10 +781,11 @@ function App({ plugin }) {
         if (!alive) return;
         fetchedAt.current = Date.now();
         setState(next);
-        setEngineError(next.error || null);
+        setHealth({ mpv: next.mpv, ytdlp: next.ytdlp, mpvError: next.mpvError });
+        setError(next.mpvError && !next.mpv ? next.mpvError : null);
       } catch (e) {
         if (!alive) return;
-        setEngineError(e?.message || "player error");
+        setError(e?.message || "sidecar offline");
       }
     };
     load();
@@ -2051,7 +812,7 @@ function App({ plugin }) {
       volumeInit.current = true;
       const saved = Number(plugin.settings.volume);
       if (Number.isFinite(saved) && saved !== state.volume) {
-        plugin.setVolume(saved);
+        plugin.setVolume(saved).catch(() => {});
         setVolume(saved);
       } else {
         setVolume(state.volume);
@@ -2087,7 +848,6 @@ function App({ plugin }) {
   const run = async (fn) => {
     if (busy) return;
     setBusy(true);
-    setError(null);
     try {
       await fn();
       await refresh();
@@ -2110,7 +870,7 @@ function App({ plugin }) {
     plugin.settings.volume = next;
     plugin.save();
     clearTimeout(volTimer.current);
-    volTimer.current = setTimeout(() => { plugin.setVolume(next); }, 160);
+    volTimer.current = setTimeout(() => { plugin.setVolume(next).catch(() => {}); }, 160);
   };
 
   const seek = (e) => {
@@ -2138,20 +898,27 @@ function App({ plugin }) {
 
   const playTrack = async (t) => {
     if (!t?.url) return;
-    await run(() => plugin.play(t));
+    await run(() => plugin.play({ url: t.url }));
     setView("now");
   };
 
   const addQueue = async (t) => {
     if (!t?.url) return;
-    await run(() => plugin.addQueue(t));
+    await run(() => plugin.addQueue({ url: t.url }));
     flashNotice("added to queue");
   };
 
   const playUrl = async () => {
     const url = urlDraft.trim();
-    if (!url) { flashNotice("paste a YouTube URL"); return; }
+    if (!url) { flashNotice("paste a YouTube or playlist URL"); return; }
     await run(() => plugin.play({ url }));
+    setView("now");
+  };
+
+  const queuePlaylist = async () => {
+    const url = urlDraft.trim();
+    if (!url) { flashNotice("paste a playlist URL"); return; }
+    await run(() => plugin.playPlaylist(url));
     setView("now");
   };
 
@@ -2224,86 +991,31 @@ function App({ plugin }) {
     setBotMenuOpen(false);
   };
 
+  const saveSidecar = () => {
+    plugin.settings.sidecarUrl = sidecarDraft.trim() || DEFAULT_SETTINGS.sidecarUrl;
+    plugin.settings.sidecarToken = tokenDraft.trim() || DEFAULT_SETTINGS.sidecarToken;
+    plugin.save();
+    setError(null);
+    flashNotice("sidecar settings saved");
+    plugin.health().then((h) => { setHealth(h); flashNotice("sidecar connected"); })
+      .catch((e) => setError(e?.message || "sidecar offline"));
+  };
+
+  const testSidecar = () => {
+    plugin.settings.sidecarUrl = sidecarDraft.trim() || DEFAULT_SETTINGS.sidecarUrl;
+    plugin.settings.sidecarToken = tokenDraft.trim() || DEFAULT_SETTINGS.sidecarToken;
+    plugin.save();
+    plugin.health().then((h) => { setHealth(h); setError(null); flashNotice("sidecar connected"); })
+      .catch((e) => setError(e?.message || "sidecar offline"));
+  };
+
   const saveChannel = () => {
     plugin.settings.musicChannelId = channelDraft.trim();
     plugin.save();
     flashNotice("music channel saved", 3000);
   };
 
-  const openYouTubeLogin = () => {
-    openExternal("https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F");
-  };
-
-  const pasteYouTubeCookie = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text || !text.trim()) {
-        setCookieStatus("Clipboard is empty. Copy the Cookie header first.");
-        return;
-      }
-      const saved = plugin.setYouTubeCookie(text);
-      if (!saved || !cookieLooksSignedIn(saved)) {
-        setCookieDraft(text);
-        setCookieStatus("Clipboard text has no YouTube session cookie. Copy the full Cookie header or cURL.");
-        return;
-      }
-      setCookieDraft("");
-      setCookieStatus("Cookie saved. Checking login...");
-      setLoginBusy(true);
-      try {
-        const result = await plugin.verifyYouTubeLogin();
-        if (result.ok) {
-          setCookieStatus("Signed in as " + result.name + ".");
-          flashNotice("YouTube login verified", 3500);
-        } else {
-          setCookieStatus("Cookie saved. Login check: " + (result.error || "not verified") + ". Playback will test it.");
-        }
-      } finally {
-        setLoginBusy(false);
-      }
-    } catch {
-      setCookieStatus("Clipboard access was denied. Paste with Ctrl+V into the box.");
-    }
-  };
-
-  const saveYouTubeCookie = () => {
-    const saved = plugin.setYouTubeCookie(cookieDraft);
-    setCookieDraft("");
-    if (!saved) setCookieStatus("Not signed in. Restricted videos fall back to the embed.");
-    else if (!cookieLooksSignedIn(saved)) setCookieStatus("Cookie saved, but no YouTube session cookie was found. Copy the full Cookie header.");
-    else setCookieStatus("Cookie saved. Test login or play a restricted video.");
-    flashNotice(saved ? "YouTube login saved (hidden)" : "YouTube login cleared", 3500);
-  };
-
-  const testYouTubeCookie = async () => {
-    if (loginBusy) return;
-    if (cookieDraft.trim()) {
-      plugin.setYouTubeCookie(cookieDraft);
-      setCookieDraft("");
-    }
-    setLoginBusy(true);
-    setCookieStatus("Checking login...");
-    try {
-      const result = await plugin.verifyYouTubeLogin();
-      if (result.ok) {
-        setCookieStatus("Signed in as " + result.name + ".");
-        flashNotice("YouTube login verified", 3500);
-      } else {
-        setCookieStatus("Login check failed: " + (result.error || "not signed in"));
-      }
-    } catch {
-      setCookieStatus("Login check failed. Cookie saved; playback will test it.");
-    } finally {
-      setLoginBusy(false);
-    }
-  };
-
-  const clearYouTubeCookie = () => {
-    plugin.clearYouTubeCookie();
-    setCookieDraft("");
-    setCookieStatus("Not signed in. Restricted videos fall back to the embed.");
-    flashNotice("YouTube login cleared", 3000);
-  };
+  const startCommand = 'start "" "%APPDATA%\\BetterDiscord\\plugins\\tools\\youtube-sidecar\\start-youtube-panel.cmd"';
 
   // ---------------------------------------------------------------- views
   const miniBar = h("div", {
@@ -2314,7 +1026,7 @@ function App({ plugin }) {
     cover ? h("img", { src: cover, alt: "" }) : h("div", { className: "yp-mini-art" }),
     h("div", { className: "yp-mini-main" },
       h("div", { className: "yp-mini-title" }, track ? track.title : "Nothing playing"),
-      h("div", { className: "yp-mini-sub" }, track ? (track.artist || "YouTube") : "search or paste a YouTube link")),
+      h("div", { className: "yp-mini-sub" }, track ? (track.artist || "YouTube") : "start the sidecar")),
     h("button", {
       className: "yp-btn",
       title: state?.isPlaying ? "Pause" : "Play",
@@ -2333,7 +1045,7 @@ function App({ plugin }) {
         ? h("img", { className: "yp-cover", src: cover, alt: "", style: { width: artSize + "px", height: artSize + "px" } })
         : h("div", { className: "yp-cover yp-cover-empty", style: { width: artSize + "px", height: artSize + "px" } }, icon("youtube", 54)),
       h("div", { className: "yp-title" }, track ? track.title : "Nothing playing"),
-      h("div", { className: "yp-artist" }, track ? (track.artist || "YouTube") : "Search or paste a YouTube link"),
+      h("div", { className: "yp-artist" }, track ? (track.artist || "YouTube") : "Start the sidecar and search"),
       h("div", { className: "yp-progress-row" },
         h("div", { className: "yp-progress", onClick: seek },
           h("div", { className: "yp-bar" },
@@ -2378,51 +1090,8 @@ function App({ plugin }) {
           onChange: (e) => changeVolume(Number(e.target.value)),
         }))
     ),
-    state?.blocked
-      ? h("div", { className: "yp-error" },
-          state?.streamError ? "Stream: " + state.streamError + ". " : null,
-          state?.mode === "stream"
-            ? "Audio did not start. "
-            : (state?.muted && state?.gotInfo)
-              ? "YouTube started muted. "
-              : "YouTube did not start. This video may be blocked from embeds. ",
-          (state?.mode === "stream" || (state?.muted && state?.gotInfo)) ? h("button", {
-            className: "yp-textbtn",
-            onClick: () => plugin.engine.enableSound(),
-          }, "Enable sound") : null,
-          /LOGIN_REQUIRED|Sign in/i.test(state?.streamError || "") ? h("button", {
-            className: "yp-textbtn",
-            onClick: () => setView("settings"),
-          }, "Sign in") : null,
-          track ? h("button", {
-            className: "yp-textbtn",
-            onClick: async () => { await sendBotCommand("play"); },
-          }, "Send to bot") : null,
-          track ? h("button", {
-            className: "yp-textbtn",
-            onClick: () => plugin.engine.retryStream(),
-          }, "Retry stream") : null,
-          state?.mode !== "stream" ? h("button", {
-            className: "yp-textbtn",
-            onClick: () => plugin.engine.setVideoVisible(!state.videoVisible),
-          }, state.videoVisible ? "Hide video" : "Show video") : null,
-          track ? h("button", {
-            className: "yp-textbtn",
-            onClick: () => openExternal(track.url),
-          }, "Open on YouTube") : null)
-      : null,
-    state?.loading ? h("div", { className: "yp-notice" }, "Loading audio stream...") : null,
     notice ? h("div", { className: "yp-notice" }, notice) : null,
-    (error || engineError) ? h("div", { className: "yp-error" },
-      error || engineError,
-      track ? h("button", {
-        className: "yp-textbtn",
-        onClick: async () => { await sendBotCommand("play"); },
-      }, "Send to bot") : null,
-      track ? h("button", {
-        className: "yp-textbtn",
-        onClick: () => openExternal(track.url),
-      }, "Open on YouTube") : null) : null,
+    error ? h("div", { className: "yp-error" }, error) : null,
     miniBar
   );
 
@@ -2461,12 +1130,13 @@ function App({ plugin }) {
     h("div", { className: "yp-search-row" },
       h("input", {
         className: "yp-input",
-        placeholder: "Paste a YouTube URL",
+        placeholder: "Paste YouTube / playlist URL",
         value: urlDraft,
         onChange: (e) => setUrlDraft(e.target.value),
         onKeyDown: (e) => { if (e.key === "Enter") playUrl(); },
       }),
-      h("button", { className: "yp-textbtn", onClick: playUrl }, "Play URL")),
+      h("button", { className: "yp-textbtn", onClick: playUrl }, "Play URL"),
+      h("button", { className: "yp-textbtn", onClick: queuePlaylist }, "Queue playlist")),
     h("div", { className: "yp-scroll" },
       results === null
         ? h("div", { className: "yp-empty" }, "Search YouTube or paste a URL above.")
@@ -2474,7 +1144,7 @@ function App({ plugin }) {
           ? results.map((t) => row(t, t.id || t.url, () => playTrack(t), addQueue))
           : h("div", { className: "yp-empty" }, "No matches")),
     notice ? h("div", { className: "yp-notice" }, notice) : null,
-    (error || engineError) ? h("div", { className: "yp-error" }, error || engineError) : null,
+    error ? h("div", { className: "yp-error" }, error) : null,
     miniBar
   );
 
@@ -2494,42 +1164,35 @@ function App({ plugin }) {
           ))
         : h("div", { className: "yp-empty" }, "Queue is empty.")),
     notice ? h("div", { className: "yp-notice" }, notice) : null,
-    (error || engineError) ? h("div", { className: "yp-error" }, error || engineError) : null,
+    error ? h("div", { className: "yp-error" }, error) : null,
     miniBar
   );
 
   const settingsNode = h("div", { className: "yp-body" },
     h("div", { className: "yp-settings" },
-      h("div", { className: "yp-label" }, "Standalone player"),
-      h("div", { className: "yp-hint" },
-        "v0.4.1 - no sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
-
-      h("div", { className: "yp-sep" }),
-      h("div", { className: "yp-label" }, "YouTube account"),
-      h("div", { className: "yp-hint" }, cookieStatus),
-      h("div", { className: "yp-hint" },
-        "1. Open YouTube login. 2. Sign in and reload youtube.com. 3. DevTools > Network > a youtube.com request > right-click > Copy > Copy as cURL (or copy Request Headers > Cookie). 4. Paste here and Save."),
-      h("textarea", {
-        className: "yp-input yp-cookie",
-        rows: 3,
-        spellCheck: false,
-        placeholder: plugin.settings.youtubeCookie
-          ? "Cookie saved (hidden). Paste a new Cookie header to replace it."
-          : "Paste the Cookie header from a logged-in youtube.com request.",
-        value: cookieDraft,
-        onChange: (e) => setCookieDraft(e.target.value),
-        style: showCookie ? {} : { WebkitTextSecurity: "disc" },
-      }),
+      h("div", { className: "yp-label" }, "YouTube sidecar"),
       h("div", { className: "yp-row2" },
-        h("button", { className: "yp-textbtn", onClick: openYouTubeLogin }, "Open YouTube login"),
-        h("button", { className: "yp-textbtn", onClick: pasteYouTubeCookie }, "Paste clipboard"),
-        h("button", { className: "yp-textbtn", onClick: () => setShowCookie(!showCookie) }, showCookie ? "Hide cookie" : "Show cookie")),
-      h("div", { className: "yp-row2" },
-        h("button", { className: "yp-primary", disabled: !cookieDraft.trim(), onClick: saveYouTubeCookie }, "Save login"),
-        h("button", { className: "yp-textbtn", disabled: loginBusy, onClick: testYouTubeCookie }, loginBusy ? "Testing..." : "Test login"),
-        h("button", { className: "yp-textbtn", onClick: clearYouTubeCookie }, "Clear")),
+        h("span", { className: "yp-hint " + (health?.mpv ? "yp-ok" : "yp-bad") },
+          health ? (health.mpv ? "mpv connected" : "mpv missing") : "checking..."),
+        h("span", { className: "yp-hint" }, "yt-dlp: " + (health?.ytdlp || "?") )),
       h("div", { className: "yp-hint" },
-        "Open YouTube login, then use DevTools > Network > any youtube.com request > Request Headers > Cookie, and paste that value here. It is stored locally in plaintext and grants account access. Use a dedicated account; never share it."),
+        "Run tools/youtube-sidecar/start-youtube-panel.cmd. Requires Node, yt-dlp and mpv."),
+      h("div", { className: "yp-hint" }, "winget install yt-dlp.yt-dlp  ·  winget install shinchiro.mpv"),
+      h("button", {
+        className: "yp-textbtn",
+        onClick: async () => {
+          const ok = await copyText(startCommand);
+          flashNotice(ok ? "start command copied" : "could not copy", 3000);
+        },
+      }, "Copy start command"),
+      h("div", { className: "yp-label" }, "Sidecar URL"),
+      h("input", { className: "yp-input", value: sidecarDraft, onChange: (e) => setSidecarDraft(e.target.value) }),
+      h("div", { className: "yp-label" }, "Token"),
+      h("input", { className: "yp-input", value: tokenDraft, onChange: (e) => setTokenDraft(e.target.value) }),
+      h("div", { className: "yp-row2" },
+        h("button", { className: "yp-primary", onClick: saveSidecar }, "Save & connect"),
+        h("button", { className: "yp-textbtn", onClick: testSidecar }, "Test")),
+      health?.mpvError ? h("div", { className: "yp-hint yp-bad" }, health.mpvError) : null,
 
       h("div", { className: "yp-sep" }),
       h("div", { className: "yp-label" }, "Discord music bot"),
@@ -2589,7 +1252,7 @@ function App({ plugin }) {
       h("div", { className: "yp-hint" },
         "Commands are sent as you. The bot must be in this channel and accept prefix commands. Slash-only bots cannot be controlled this way."),
       notice ? h("div", { className: "yp-notice" }, notice) : null,
-      (error || engineError) ? h("div", { className: "yp-error" }, error || engineError) : null
+      error ? h("div", { className: "yp-error" }, error) : null
     )
   );
 
@@ -2678,10 +1341,6 @@ function App({ plugin }) {
             h("span", null, "Queue"), icon("queue", 14)),
           h("button", { className: "yp-menu-item", onClick: () => { setMenuOpen(false); setView("settings"); } },
             h("span", null, "Panel settings"), icon("dotsVertical", 14)),
-          track ? h("button", {
-            className: "yp-menu-item",
-            onClick: () => { setMenuOpen(false); openExternal(track.url); },
-          }, h("span", null, "Open on YouTube"), icon("external", 14)) : null,
           h("div", { className: "yp-menu-sep" }),
           h("button", { className: "yp-menu-item", onClick: () => { setMenuOpen(false); run(() => plugin.stop()); } },
             h("span", null, "Stop playback"), icon("close", 14)),
@@ -2716,22 +1375,5 @@ function startResize(e, plugin) {
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);
 }
-
-YouTubePanel._internals = {
-  videoIdFromUrl,
-  parseYouTubeDuration,
-  extractYouTubeInitialData,
-  parseYouTubeSearchData,
-  normalizeYouTubeVideo,
-  searchYouTube,
-  resolveYouTubeTrack,
-  resolveAudioStream,
-  netFetchBuffer,
-  normalizeYouTubeCookie,
-  cookieLooksSignedIn,
-  verifyYouTubeLogin,
-  LocalQueue,
-  YouTubeEngine,
-};
 
 module.exports = YouTubePanel;
