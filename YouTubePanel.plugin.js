@@ -322,6 +322,7 @@ function openExternal(url) {
 // ------------------------------------------------------------ youtube local
 const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const YT_INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+const YT_WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
 const YT_VISIONOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 const YT_VISIONOS_CONTEXT = {
   clientName: "VISIONOS",
@@ -517,11 +518,24 @@ async function netFetchBuffer(url, headers = {}, options = {}) {
 
 async function getYouTubeVisitorData(id) {
   if (visitorCache.value && Date.now() - visitorCache.at < 30 * 60 * 1000) return visitorCache.value;
-  const html = await netFetchText(
-    "https://www.youtube.com/watch?v=" + encodeURIComponent(id) + "&hl=en",
-    { "Accept-Language": "en-US,en;q=0.9" }
-  );
-  const match = html.match(/visitorData":"([^"]+)"/);
+  const url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id) + "&hl=en&gl=US";
+  let html = "";
+  try {
+    html = await netFetchText(url, {
+      "Accept-Language": "en-US,en;q=0.9",
+      "User-Agent": YT_WEB_UA,
+      "Cookie": "CONSENT=YES+1",
+    });
+  } catch {
+    html = await netFetchText(url);
+  }
+  let match = html.match(/visitorData":"([^"]+)"/);
+  if (!match) {
+    try {
+      const home = await netFetchText("https://www.youtube.com/?hl=en&gl=US");
+      match = home.match(/visitorData":"([^"]+)"/);
+    } catch {}
+  }
   if (!match) throw new Error("YouTube did not provide visitorData");
   visitorCache = { value: match[1], at: Date.now() };
   return match[1];
@@ -537,16 +551,22 @@ async function resolveAudioStream(id) {
     contentCheckOk: true,
     racyCheckOk: true,
   };
-  const text = await netFetchText(
-    "https://www.youtube.com/youtubei/v1/player?key=" + YT_INNERTUBE_KEY,
-    {
+  const playerUrl = "https://www.youtube.com/youtubei/v1/player?key=" + YT_INNERTUBE_KEY;
+  const playerOptions = { method: "POST", body: JSON.stringify(payload) };
+  let text;
+  try {
+    text = await netFetchText(playerUrl, {
       "Content-Type": "application/json",
       "User-Agent": YT_VISIONOS_UA,
       "X-Goog-Visitor-Id": visitorData,
       "X-Goog-Api-Format-Version": "2",
-    },
-    { method: "POST", body: JSON.stringify(payload) }
-  );
+    }, playerOptions);
+  } catch {
+    text = await netFetchText(playerUrl, {
+      "Content-Type": "application/json",
+      "X-Goog-Visitor-Id": visitorData,
+    }, playerOptions);
+  }
   let data;
   try { data = JSON.parse(text); } catch { throw new Error("YouTube player returned invalid JSON"); }
   const status = data?.playabilityStatus?.status;
@@ -883,6 +903,15 @@ class YouTubeEngine {
       this.blocked = true;
       this.notify();
     }, 1200);
+  }
+
+  retryStream() {
+    visitorCache = { value: "", at: 0 };
+    if (!this.track) return this.snapshot();
+    this.plugin.settings.audioSource = "auto";
+    this.plugin.save();
+    this.load(this.track);
+    return this.snapshot();
   }
 
   ensureAudio() {
@@ -2164,6 +2193,7 @@ function App({ plugin }) {
     ),
     state?.blocked
       ? h("div", { className: "yp-error" },
+          state?.streamError ? "Stream: " + state.streamError + ". " : null,
           state?.mode === "stream"
             ? "Audio did not start. "
             : (state?.muted && state?.gotInfo)
@@ -2177,6 +2207,10 @@ function App({ plugin }) {
             className: "yp-textbtn",
             onClick: async () => { await sendBotCommand("play"); },
           }, "Send to bot") : null,
+          track ? h("button", {
+            className: "yp-textbtn",
+            onClick: () => plugin.engine.retryStream(),
+          }, "Retry stream") : null,
           state?.mode !== "stream" ? h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.setVideoVisible(!state.videoVisible),

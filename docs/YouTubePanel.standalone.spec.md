@@ -161,7 +161,7 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 ## 9. Validation checklist
 
 - `node --check YouTubePanel.plugin.js`
-- `.jcode-tests/YouTubePanel.lifecycle-test.js` (100 assertions)
+- `.jcode-tests/YouTubePanel.lifecycle-test.js` (102 assertions)
 - `.jcode-tests/YouTubePanel.live-search-test.js` (network)
 - Live resolver: VISIONOS `OK`, itag 140 URL, ranged byte fetch.
 - Headless Chrome: listening handshake, `initialDelivery`, `infoDelivery`,

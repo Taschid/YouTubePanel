@@ -325,7 +325,11 @@ const {
   await wait(20);
   assert(plugin.state().mode === "embed", "stream failure falls back to embed");
   assert(domElements.some((el) => el.tagName === "IFRAME" && el.src.includes("dwDns8x3Jb4")), "fallback embeds the failed track");
+  assert(/HTTP 500/.test(plugin.state().streamError), "stream failure is exposed");
   failPlayer = false;
+  plugin.engine.retryStream();
+  await wait(40);
+  assert(plugin.state().mode === "stream", "retry stream re-resolves the track");
 
   // ---------------------------------------------------------- embed fallback
   plugin.settings.audioSource = "embed";
