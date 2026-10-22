@@ -1,0 +1,11 @@
+{
+  "name": "youtube-panel-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local yt-dlp + mpv sidecar for the YouTubePanel BetterDiscord plugin",
+  "main": "sidecar.js",
+  "scripts": {
+    "start": "node sidecar.js",
+    "test": "node ../../.jcode-tests/YouTubePanel.lifecycle-test.js"
+  }
+}

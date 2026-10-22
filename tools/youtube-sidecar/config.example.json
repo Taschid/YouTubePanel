@@ -1,0 +1,8 @@
+{
+  "port": 8910,
+  "token": "youtube-panel",
+  "mpvPath": "mpv",
+  "ytdlpPath": "yt-dlp",
+  "volume": 70,
+  "searchLimit": 15
+}
