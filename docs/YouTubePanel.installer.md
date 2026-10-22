@@ -1,7 +1,8 @@
 # YouTubePanel sidecar installer
 
 Status: v0.5.0 (2026-10-22)
-Product: `YouTubePanel-Setup-0.5.0.exe`
+Product: `YouTubePanel-Setup-0.5.0.exe` (offline) and
+`YouTubePanel-Setup-0.5.0-slim.exe` (2.8 MB downloader)
 Plugin: sidecar build restored from `youtubepanel-sidecar-v0.1.1`
 Sidecar: `tools/youtube-sidecar/`
 
@@ -10,7 +11,9 @@ Sidecar: `tools/youtube-sidecar/`
 One per-user Windows installer for the sidecar build:
 
 - Installs to `%LOCALAPPDATA%\YouTubePanel` (no admin).
-- Bundles Node, yt-dlp, mpv and the sidecar JS.
+- Offline build bundles Node, yt-dlp, mpv and the sidecar JS.
+- Slim build downloads Node, yt-dlp and mpv once during setup, checks pinned
+  SHA-256 values, then installs the same layout.
 - Copies `YouTubePanel.plugin.js` into
   `%APPDATA%\BetterDiscord\plugins`.
 - Backs up an existing plugin as `.plugin.js.bak`.
@@ -71,6 +74,25 @@ Optional overrides:
 
 Output: `installer\output\YouTubePanel-Setup-0.5.0.exe`.
 
+### 3.1 Slim build
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\slim\build-slim.ps1 -Version 0.5.0
+```
+
+Output: `installer\output\YouTubePanel-Setup-0.5.0-slim.exe`.
+
+The slim installer downloads:
+
+- `node-v24.19.0-win-x64.zip`
+- `mpv-x86_64-20261021-git-e471496c56.7z`
+- `yt-dlp.exe` 2026.10.21
+
+Each download has a pinned SHA-256 in `YouTubePanel-slim.iss`. The installed
+tree (including runtime versions and paths) is the same as the offline build.
+The installer itself drops from about 72 MB to 2.8 MB, but setup needs network
+access and downloads about 82 MB.
+
 Build artifacts (`installer/build`, `installer/output`) are intentionally not
 committed.
 
@@ -115,6 +137,11 @@ Tested locally on 2026-10-22:
 - Uninstall removed the install tree, plugin, Run key, and `:8910` listener;
   `YouTubePanel.config.json` remained.
 - Reinstall after uninstall succeeded and restored health.
+- Slim installer: 2.8 MB output, silent install exit 0, downloaded and
+  verified all three payloads, and installed `node v24.19.0`,
+  `mpv v0.41.0-1227-ge471496c5`, and `yt-dlp 2026.10.21`.
+- Slim `/health` returned `mpv: true`; MONSTER played with position and
+  duration 160.
 
 Still required before calling it distribution-ready:
 
@@ -128,7 +155,8 @@ Still required before calling it distribution-ready:
 ## 7. Known limitations
 
 - Unsigned installer will trigger SmartScreen on other machines.
-- The installer bundles ~200 MB (Node + mpv + yt-dlp).
+- The offline installer bundles ~246 MB of runtime (about 72 MB compressed).
+  The slim installer is 2.8 MB but downloads ~82 MB during setup.
 - yt-dlp updates are not automatic; rebuild or update the bundled exe.
 - mpv/yt-dlp licensing must be respected when redistributing.
 - BetterDiscord guidelines do not allow this sidecar design in the official

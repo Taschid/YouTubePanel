@@ -79,6 +79,9 @@ Node sidecar.
   Inno Setup; bundled health returned mpv=true/yt-dlp 2026.10.21; MONSTER
   played; uninstall/reinstall and hidden auto-start path verified locally.
   See `YouTubePanel.installer.md` for the full evidence and remaining tests.
+- **Slim installer v0.5.0**: `YouTubePanel-Setup-0.5.0-slim.exe` (2.8 MB)
+  downloads Node/mpv/yt-dlp with pinned SHA-256 values; silent install,
+  health, and MONSTER playback verified.
 - `node --check` clean for plugin, sidecar and lib.
 - **50 lifecycle assertions**: metadata normalization, hyphenated titles, queue
   next/previous/repeat/shuffle/remove, sidecar URL/method/body/token mapping,

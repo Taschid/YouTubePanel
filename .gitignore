@@ -1,6 +1,8 @@
 *.tokens.json
 *.config.json
 installer/build/
+installer/slim/build/
 installer/output/
+*.plugin.js.bak
 .jcode-tests/../.git
 node_modules/
