@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
  * @description Docked YouTube / YouTube Music controller for Discord, driven by a local yt-dlp + mpv sidecar.
- * @version 0.1.0
+ * @version 0.1.1
  * @author jcode
  * @authorId 0
  */
@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS = {
   height: 330,
   fullHeight: true,
   visible: true,
-  hotkey: ["Alt", "y"],
+  hotkey: ["Alt", "q"],
   topOffset: 12,
   volume: 70,
 };
@@ -154,7 +154,7 @@ function fmtTime(ms) {
 }
 
 const CSS = `
-#youtubepanel-root { position: fixed; inset: 0; pointer-events: none; z-index: 150; }
+#youtubepanel-root { position: fixed; inset: 0; pointer-events: none; z-index: 151; }
 #youtubepanel-panel {
   position: fixed;
   top: 12px;
@@ -172,7 +172,7 @@ const CSS = `
   font-family: var(--font, var(--font-primary, "gg sans", "Noto Sans", sans-serif));
 }
 #youtubepanel-panel.yp-hidden { display: none; }
-.yp-edge { position: absolute; left: -12px; top: 0; bottom: 0; width: 14px; z-index: 4; }
+.yp-edge { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; z-index: 4; }
 .yp-resize { position: absolute; left: 0; right: 0; bottom: -5px; height: 10px; cursor: ns-resize; z-index: 5; }
 .yp-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 34px 16px 12px; }
 .yp-brand { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: #fff; }
@@ -320,6 +320,13 @@ class YouTubePanel {
     this.meta = meta;
     this.bd = typeof BdApi === "function" ? new BdApi(PLUGIN) : BdApi;
     this.settings = { ...DEFAULT_SETTINGS, ...(this.bd.Data.load("settings") || {}) };
+    // v0.1.1: move the previous Alt+Y default to Alt+Q. A custom binding is
+    // left alone unless it is exactly the old default.
+    const hk = Array.isArray(this.settings.hotkey) ? this.settings.hotkey : [];
+    if (hk.length === 2 && String(hk[0]).toLowerCase() === "alt" && String(hk[1]).toLowerCase() === "y") {
+      this.settings.hotkey = ["Alt", "q"];
+      this.save();
+    }
     this._bump = null;
     this._reactRoot = null;
     this._rootEl = null;
@@ -612,6 +619,7 @@ class YouTubePanel {
     this.registerPanel();
     BdApi.DOM.addStyle("YouTubePanel-css", CSS);
     this.startHotkey();
+    if (this.settings.visible) this.hideOtherPanels();
     this.mount();
     this.log("started; visible=" + this.settings.visible);
   }
@@ -679,7 +687,7 @@ class YouTubePanel {
           type: "textbox",
           id: "hotkey",
           name: "Hotkey",
-          note: "Comma separated, e.g. Alt,y",
+          note: "Comma separated, e.g. Alt,q",
           value: (this.settings.hotkey || []).join(","),
         },
       ],
@@ -821,7 +829,15 @@ function App({ plugin }) {
   );
   const pct = duration ? Math.max(0, Math.min(100, (position / duration) * 100)) : 0;
   const cover = track?.thumbnail || "";
-  const artSize = Math.max(96, Math.min(260, (Number(plugin.settings.height) || 330) - 210));
+  // Match SpotifyPanel's full-bleed artwork sizing: width-bound in full-height
+  // mode, height-bound when the panel is manually resized.
+  const panelHeight = Number(plugin.settings.height) || 330;
+  const viewportH = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : panelHeight + 24;
+  const viewportW = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1280;
+  const panelWidth = Math.min(Number(plugin.settings.width) || 420, viewportW - 24);
+  const panelBoxH = plugin.settings.fullHeight ? viewportH - 24 : panelHeight;
+  const availableH = panelBoxH - 392;
+  const artSize = Math.max(96, Math.min(Math.round(panelWidth - 48), availableH));
   const queue = state?.queue || { items: [], index: -1, upcoming: [] };
 
   const flashNotice = (text, ms = 4000) => {

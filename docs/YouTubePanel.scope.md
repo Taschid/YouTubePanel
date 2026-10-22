@@ -1,6 +1,6 @@
 # YouTubePanel scope
 
-Status: v0.1.0, new product (2026-10-22)
+Status: v0.1.1, new product (2026-10-22)
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: `tools/youtube-sidecar/`
 
@@ -48,7 +48,7 @@ constraints in `docs/SpotifyPanel.scope.md`.
 - Panel settings: sidecar URL/token, health, bot profile/prefix/templates, channel
   id, height/hotkey (BD settings).
 - Mutual exclusion with SpotifyPanel and SideChat via `window.__jcodePanels`.
-- Hotkey `Alt+Y` by default.
+- Hotkey `Alt+Q` by default.
 
 ## 5. Out of scope (v1)
 

@@ -1,6 +1,6 @@
 # YouTubePanel build log
 
-Status: v0.1.0 (2026-10-22), new product
+Status: v0.1.1 (2026-10-22), new product
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: `tools/youtube-sidecar/`
 Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`
@@ -22,7 +22,10 @@ Node sidecar.
   opens the command sheet (play, pause, resume, skip, previous, repeat, shuffle,
   queue, now playing, stop, custom). Jockie/JMusicBot/MusicBot/Custom profiles.
 - **Coexistence:** registers `window.__jcodePanels.youtube`; showing YouTube hides
-  SpotifyPanel/SideChat. `SpotifyPanel.plugin.js` is unchanged.
+  SpotifyPanel/SideChat, and startup hides the other panels so they never overlap.
+  The left-edge guard is inside the panel, so it cannot be clicked through from
+  the neighbouring panel. SpotifyPanel was only touched to apply the same
+  startup mutual-exclusion rule.
 
 ## 2. Files
 
@@ -34,7 +37,7 @@ Node sidecar.
 | `tools/youtube-sidecar/start-youtube-panel.cmd` | launcher + dependency check |
 | `tools/youtube-sidecar/config.example.json` | port/token/paths/volume |
 | `tools/youtube-sidecar/README.md` | setup and API reference |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 48-assertion headless test |
+| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 50-assertion headless test |
 
 ## 3. Sidecar
 
@@ -57,6 +60,8 @@ Node sidecar.
 - Right-click Send: bot command sheet; result appears inside the sheet.
 - Sidecar offline: inline error with the launcher path; settings has Test.
 - Volume is persisted in plugin settings and pushed to mpv on first state load.
+- Artwork uses the same width/height budget as SpotifyPanel: full-bleed
+  `panelWidth - 48` in full-height mode, height-bound when manually resized.
 - Cleanup: unregisters the panel and removes CSS/style on stop.
 
 ## 5. Setup
@@ -64,13 +69,13 @@ Node sidecar.
 1. `winget install yt-dlp.yt-dlp`
 2. `winget install shinchiro.mpv`
 3. Run `tools/youtube-sidecar/start-youtube-panel.cmd`.
-4. Enable **YouTubePanel** in BetterDiscord (hotkey `Alt+Y`).
+4. Enable **YouTubePanel** in BetterDiscord (hotkey `Alt+Q`).
 5. Panel settings: set the music channel id and bot; test the sidecar.
 
 ## 6. Validation (2026-10-22)
 
 - `node --check` clean for plugin, sidecar and lib.
-- **48 lifecycle assertions**: metadata normalization, hyphenated titles, queue
+- **50 lifecycle assertions**: metadata normalization, hyphenated titles, queue
   next/previous/repeat/shuffle/remove, sidecar URL/method/body/token mapping,
   offline error, bot URL/query/prefix/raw/skip, missing channel/track/disabled
   play, BD settings, coexistence.
@@ -102,3 +107,10 @@ Node sidecar.
 - Sidecar thumbnail proxy for CSP-restricted themes.
 - Optional bulk "send queue to bot" action.
 - Decide whether to offer an official IFrame fallback for ToS-sensitive users.
+
+## 8. Version history
+
+- **0.1.1**: hotkey moved from Alt+Y to Alt+Q (existing Alt+Y configs migrate
+  on load), Spotify-matched artwork sizing, inside-panel left-edge guard, and
+  startup mutual exclusion so right-column panels do not overlap.
+- **0.1.0**: initial YouTubePanel + yt-dlp/mpv sidecar.

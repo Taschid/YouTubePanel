@@ -151,6 +151,15 @@ global.fetch = baseFetch;
   // ---------------------------------------------------------- sidecar client
   const sp = new YouTubePanel({ name: "YouTubePanel" });
   assert(sp.settings.sidecarUrl === "http://127.0.0.1:8910", "default sidecar URL");
+  assert(sp.settings.hotkey.join("+").toLowerCase() === "alt+q", "legacy Alt+Y migrates to Alt+Q");
+  {
+    const withHotkey = settings;
+    settings = { ...settings };
+    delete settings.hotkey;
+    const fresh = new YouTubePanel({});
+    assert(fresh.settings.hotkey.join("+").toLowerCase() === "alt+q", "default hotkey is Alt+Q");
+    settings = withHotkey;
+  }
 
   const health = await sp.health();
   assert(health.mpv === true && health.ytdlp === "test", "health response parsed");
