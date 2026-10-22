@@ -340,7 +340,9 @@ const YT_VISIONOS_CONTEXT = {
 let visitorCache = { value: "", at: 0, auth: "" };
 
 function normalizeYouTubeCookie(input) {
-  const raw = String(input || "").trim();
+  let raw = String(input || "").trim();
+  const curlCookie = raw.match(/(?:--header|-H)\s+['"]cookie:\s*([^'"]+)['"]/i);
+  if (curlCookie) raw = curlCookie[1];
   if (!raw) return "";
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && (!line.startsWith("#") || line.startsWith("#HttpOnly_")));
   if (lines.some((line) => line.includes("\t"))) {
@@ -2487,7 +2489,7 @@ function App({ plugin }) {
       h("div", { className: "yp-label" }, "YouTube account"),
       h("div", { className: "yp-hint" }, cookieStatus),
       h("div", { className: "yp-hint" },
-        "1. Open YouTube login. 2. Sign in and reload youtube.com. 3. DevTools > Network > a youtube.com request > Request Headers > copy Cookie. 4. Paste here and Save."),
+        "1. Open YouTube login. 2. Sign in and reload youtube.com. 3. DevTools > Network > a youtube.com request > right-click > Copy > Copy as cURL (or copy Request Headers > Cookie). 4. Paste here and Save."),
       h("textarea", {
         className: "yp-input yp-cookie",
         rows: 3,

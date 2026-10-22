@@ -261,6 +261,7 @@ const {
   assert(normalizeYouTubeCookie("#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta") === "SID=a", "HttpOnly cookies.txt entry normalizes");
   assert(cookieLooksSignedIn("SID=a") === true, "session cookie is recognized");
   assert(cookieLooksSignedIn("PREF=x") === false, "non-session cookie is rejected");
+  assert(normalizeYouTubeCookie("curl 'https://www.youtube.com/' -H 'cookie: SID=a; HSID=b'") === "SID=a; HSID=b", "cURL cookie header extracts");
   const noCookieLogin = await verifyYouTubeLogin("");
   assert(noCookieLogin.ok === false, "login check rejects an empty cookie");
 
