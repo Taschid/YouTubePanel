@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
- * @description Standalone YouTube / YouTube Music controller for Discord. No sidecar, mpv, or yt-dlp.
- * @version 0.2.0
+ * @description Standalone YouTube / YouTube Music controller for Discord with stream extraction and embed fallback. No sidecar, mpv, or yt-dlp.
+ * @version 0.3.0
  * @author jcode
  * @authorId 0
  */
@@ -23,7 +23,14 @@ const DEFAULT_SETTINGS = {
   hotkey: ["Alt", "q"],
   topOffset: 12,
   volume: 70,
+  audioSource: "auto",
 };
+
+const AUDIO_SOURCES = [
+  { id: "auto", label: "Auto (stream, then embed)" },
+  { id: "stream", label: "Stream extraction" },
+  { id: "embed", label: "YouTube embed" },
+];
 
 const MUSIC_BOT_ACTIONS = [
   { id: "play", label: "Play current track", icon: "play" },
@@ -314,6 +321,20 @@ function openExternal(url) {
 
 // ------------------------------------------------------------ youtube local
 const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const YT_INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+const YT_VISIONOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+const YT_VISIONOS_CONTEXT = {
+  clientName: "VISIONOS",
+  clientVersion: "1.02",
+  deviceMake: "Apple",
+  deviceModel: "RealityDevice17,1",
+  userAgent: YT_VISIONOS_UA,
+  osName: "visionOS",
+  osVersion: "26.5.23O471",
+  hl: "en",
+  gl: "US",
+};
+let visitorCache = { value: "", at: 0 };
 
 function canonicalWatchUrl(id) {
   return "https://www.youtube.com/watch?v=" + id;
@@ -448,13 +469,14 @@ function bdNetFetch() {
   return typeof fetch === "function" ? fetch.bind(globalThis) : null;
 }
 
-async function netFetchText(url, headers = {}) {
+async function netFetchText(url, headers = {}, options = {}) {
   const fetcher = bdNetFetch();
   if (!fetcher) throw new Error("network is unavailable");
   const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), 15000) : 0;
+  const timer = controller ? setTimeout(() => controller.abort(), options.timeout || 15000) : 0;
   try {
     const init = {
+      ...options,
       headers: { "Accept-Language": "en-US,en;q=0.9", ...headers },
       ...(controller ? { signal: controller.signal } : {}),
     };
@@ -467,6 +489,84 @@ async function netFetchText(url, headers = {}) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function netFetchBuffer(url, headers = {}, options = {}) {
+  const fetcher = bdNetFetch();
+  if (!fetcher) throw new Error("network is unavailable");
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), options.timeout || 30000) : 0;
+  try {
+    const init = {
+      ...options,
+      headers: { Accept: "*/*", ...headers },
+      ...(controller ? { signal: controller.signal } : {}),
+    };
+    const res = await fetcher(url, init);
+    if (!res || !res.ok) throw new Error("audio HTTP " + (res?.status || "?"));
+    if (typeof res.arrayBuffer === "function") return await res.arrayBuffer();
+    if (typeof res.blob === "function") return await (await res.blob()).arrayBuffer();
+    throw new Error("audio response has no binary reader");
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error("audio request timed out");
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function getYouTubeVisitorData(id) {
+  if (visitorCache.value && Date.now() - visitorCache.at < 30 * 60 * 1000) return visitorCache.value;
+  const html = await netFetchText(
+    "https://www.youtube.com/watch?v=" + encodeURIComponent(id) + "&hl=en",
+    { "Accept-Language": "en-US,en;q=0.9" }
+  );
+  const match = html.match(/visitorData":"([^"]+)"/);
+  if (!match) throw new Error("YouTube did not provide visitorData");
+  visitorCache = { value: match[1], at: Date.now() };
+  return match[1];
+}
+
+async function resolveAudioStream(id) {
+  const videoId = videoIdFromUrl(id);
+  if (!videoId) throw new Error("not a YouTube video URL or id");
+  const visitorData = await getYouTubeVisitorData(videoId);
+  const payload = {
+    context: { client: { ...YT_VISIONOS_CONTEXT, visitorData } },
+    videoId,
+    contentCheckOk: true,
+    racyCheckOk: true,
+  };
+  const text = await netFetchText(
+    "https://www.youtube.com/youtubei/v1/player?key=" + YT_INNERTUBE_KEY,
+    {
+      "Content-Type": "application/json",
+      "User-Agent": YT_VISIONOS_UA,
+      "X-Goog-Visitor-Id": visitorData,
+      "X-Goog-Api-Format-Version": "2",
+    },
+    { method: "POST", body: JSON.stringify(payload) }
+  );
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error("YouTube player returned invalid JSON"); }
+  const status = data?.playabilityStatus?.status;
+  if (status !== "OK") {
+    if (status === "LOGIN_REQUIRED") visitorCache = { value: "", at: 0 };
+    throw new Error("YouTube stream " + (status || "failed") + ": " + (data?.playabilityStatus?.reason || "unavailable"));
+  }
+  const formats = Array.isArray(data?.streamingData?.adaptiveFormats) ? data.streamingData.adaptiveFormats : [];
+  const audio = formats.filter((format) => String(format?.mimeType || "").startsWith("audio/") && format?.url);
+  const chosen = audio.find((format) => Number(format.itag) === 140)
+    || audio.find((format) => Number(format.itag) === 251)
+    || audio.find((format) => Number(format.itag) === 139)
+    || audio[0];
+  if (!chosen) throw new Error("YouTube did not return an audio stream");
+  return {
+    url: chosen.url,
+    mimeType: chosen.mimeType || "audio/mp4",
+    contentLength: Number(chosen.contentLength) || 0,
+    itag: Number(chosen.itag) || 0,
+  };
 }
 
 async function searchYouTube(query) {
@@ -597,8 +697,14 @@ class YouTubeEngine {
     this.blocked = false;
     this.videoVisible = false;
     this.error = "";
+    this.mode = "none";
+    this.loading = false;
+    this.streamError = "";
     this._iframe = null;
     this._host = null;
+    this._audio = null;
+    this._audioUrl = "";
+    this._streamToken = 0;
     this._listener = null;
     this._loadTimer = 0;
     this._listenTimer = 0;
@@ -633,10 +739,15 @@ class YouTubeEngine {
     this._autoplayTimer = 0;
     this._muteTimer = 0;
     this._notifyTimer = 0;
+    this._streamToken++;
+    this.mode = "none";
+    this.clearAudio();
     try { this._iframe?.remove(); } catch {}
     try { this._host?.remove(); } catch {}
+    try { this._audio?.remove(); } catch {}
     this._iframe = null;
     this._host = null;
+    this._audio = null;
     this.videoVisible = false;
   }
 
@@ -710,6 +821,9 @@ class YouTubeEngine {
       blocked: this.blocked,
       muted: this._muted,
       gotInfo: this._gotInfo,
+      mode: this.mode,
+      loading: this.loading,
+      streamError: this.streamError,
       videoVisible: this.videoVisible,
       error: this.error,
       queue: {
@@ -737,6 +851,19 @@ class YouTubeEngine {
   }
 
   unmuteNow() {
+    if (this.mode === "stream") {
+      try {
+        this._audio.muted = false;
+        this._audio.volume = this.volume / 100;
+        const played = this._audio.play();
+        if (played && typeof played.catch === "function") {
+          played.catch(() => { this.blocked = true; this.notify(); });
+        }
+      } catch {}
+      this.blocked = false;
+      this.notify();
+      return;
+    }
     this.post("unMute");
     this.post("setVolume", [this.volume]);
     this.blocked = false;
@@ -744,6 +871,10 @@ class YouTubeEngine {
   }
 
   enableSound() {
+    if (this.mode === "stream") {
+      this.unmuteNow();
+      return;
+    }
     this.unmuteNow();
     clearTimeout(this._muteTimer);
     this._muteTimer = setTimeout(() => {
@@ -754,7 +885,133 @@ class YouTubeEngine {
     }, 1200);
   }
 
+  ensureAudio() {
+    if (this._audio) return this._audio;
+    const audio = document.createElement("audio");
+    audio.preload = "auto";
+    audio.style.cssText = "display:none;";
+    audio.addEventListener("loadedmetadata", () => {
+      if (this.mode !== "stream") return;
+      if (Number.isFinite(audio.duration) && audio.duration > 0) this.duration = audio.duration;
+      this.notify();
+    });
+    audio.addEventListener("timeupdate", () => {
+      if (this.mode !== "stream") return;
+      this.position = Number(audio.currentTime) || 0;
+      if (Number.isFinite(audio.duration) && audio.duration > 0) this.duration = audio.duration;
+      this.notify();
+    });
+    audio.addEventListener("play", () => {
+      if (this.mode !== "stream") return;
+      this.isPlaying = true;
+      this.blocked = false;
+      this.notify();
+    });
+    audio.addEventListener("pause", () => {
+      if (this.mode !== "stream" || audio.ended) return;
+      this.isPlaying = false;
+      this.notify();
+    });
+    audio.addEventListener("ended", () => {
+      if (this.mode !== "stream") return;
+      this.isPlaying = false;
+      this.handleEnded();
+    });
+    audio.addEventListener("error", () => {
+      if (this.mode !== "stream") return;
+      this.error = "Audio stream failed.";
+      this.isPlaying = false;
+      this.notify();
+    });
+    document.body.appendChild(audio);
+    this._audio = audio;
+    return audio;
+  }
+
+  clearAudio() {
+    if (this._audio) {
+      try { this._audio.pause(); } catch {}
+      try { this._audio.removeAttribute("src"); } catch {}
+      try { this._audio.load(); } catch {}
+    }
+    if (this._audioUrl) {
+      try { URL.revokeObjectURL(this._audioUrl); } catch {}
+      this._audioUrl = "";
+    }
+  }
+
+  async startStream(track, token) {
+    this.mode = "loading";
+    this.loading = true;
+    this.streamError = "";
+    this.notify();
+    try {
+      const stream = await resolveAudioStream(track.id);
+      if (token !== this._streamToken) return;
+      const buffer = await netFetchBuffer(stream.url, { "User-Agent": YT_VISIONOS_UA });
+      if (token !== this._streamToken) return;
+      const blob = new Blob([buffer], { type: stream.mimeType });
+      const audioUrl = URL.createObjectURL(blob);
+      this.clearAudio();
+      this._audioUrl = audioUrl;
+      const audio = this.ensureAudio();
+      audio.src = audioUrl;
+      audio.volume = this.volume / 100;
+      audio.muted = false;
+      this.mode = "stream";
+      this.loading = false;
+      this.isPlaying = true;
+      this.blocked = false;
+      this.error = "";
+      this.notify();
+      const played = audio.play();
+      if (played && typeof played.catch === "function") {
+        played.catch(() => {
+          this.blocked = true;
+          this.notify();
+        });
+      }
+    } catch (e) {
+      if (token !== this._streamToken) return;
+      this.loading = false;
+      this.streamError = e?.message || "stream extraction failed";
+      this.mode = "none";
+      this.notify();
+      this.loadEmbed(track);
+    }
+  }
+
   load(track) {
+    if (!track?.id) throw new Error("not a playable YouTube track");
+    this.track = track;
+    this.position = 0;
+    this.duration = Number(track.duration) || 0;
+    this.isPlaying = true;
+    this.blocked = false;
+    this.error = "";
+    this.streamError = "";
+    this.loading = false;
+    this.mode = "none";
+    this._muted = false;
+    this._gotInfo = false;
+    this._streamToken++;
+    this.videoVisible = false;
+    if (this._host) {
+      this._host.style.cssText = "position:fixed;left:0;bottom:0;width:2px;height:2px;overflow:hidden;opacity:0.01;pointer-events:none;z-index:0;";
+    }
+    this.clearAudio();
+    if (this._iframe) {
+      try { this._iframe.src = "about:blank"; } catch {}
+    }
+    const source = String(this.plugin.settings.audioSource || "auto");
+    if (source === "embed") {
+      this.loadEmbed(track);
+      return;
+    }
+    this.startStream(track, this._streamToken);
+  }
+
+  loadEmbed(track) {
     if (!track?.id) throw new Error("not a playable YouTube track");
     this.track = track;
     this.position = 0;
@@ -768,6 +1025,8 @@ class YouTubeEngine {
     this._muted = true;
     this._gotInfo = false;
     this._ending = false;
+    this.mode = "embed";
+    this.loading = false;
     clearTimeout(this._loadTimer);
     clearTimeout(this._autoplayTimer);
     clearTimeout(this._muteTimer);
@@ -805,6 +1064,7 @@ class YouTubeEngine {
   onMessage(event) {
     if (!this._iframe || event.source !== this._iframe.contentWindow) return;
     if (event.origin !== "https://www.youtube.com") return;
+    if (this.mode !== "embed") return;
     let data = event.data;
     if (typeof data === "string") {
       try { data = JSON.parse(data); } catch { return; }
@@ -917,8 +1177,13 @@ class YouTubeEngine {
     if (!this.track) return;
     if (this.queue.repeat === "one") {
       this.position = 0;
-      this.post("seekTo", [0, true]);
-      this.post("playVideo");
+      if (this.mode === "stream") {
+        this.seek(0);
+        this.resume();
+      } else {
+        this.post("seekTo", [0, true]);
+        this.post("playVideo");
+      }
       this.isPlaying = true;
       this.notify();
       return;
@@ -928,8 +1193,13 @@ class YouTubeEngine {
       this.load(next);
     } else if (next) {
       this.position = 0;
-      this.post("seekTo", [0, true]);
-      this.post("playVideo");
+      if (this.mode === "stream") {
+        this.seek(0);
+        this.resume();
+      } else {
+        this.post("seekTo", [0, true]);
+        this.post("playVideo");
+      }
       this.isPlaying = true;
       this.notify();
     } else {
@@ -984,7 +1254,11 @@ class YouTubeEngine {
   }
 
   pause() {
-    this.post("pauseVideo");
+    if (this.mode === "stream") {
+      try { this._audio.pause(); } catch {}
+    } else {
+      this.post("pauseVideo");
+    }
     clearTimeout(this._autoplayTimer);
     this._autoplayTimer = 0;
     this.blocked = false;
@@ -995,6 +1269,20 @@ class YouTubeEngine {
 
   resume() {
     if (!this.track) return this.snapshot();
+    if (this.mode === "stream") {
+      try {
+        const played = this._audio.play();
+        if (played && typeof played.catch === "function") {
+          played.catch(() => {
+            this.blocked = true;
+            this.notify();
+          });
+        }
+      } catch {}
+      this.blocked = false;
+      this.notify();
+      return this.snapshot();
+    }
     if (!this._volumeSent) this.load(this.track);
     else {
       this.post("playVideo");
@@ -1008,7 +1296,11 @@ class YouTubeEngine {
   seek(seconds) {
     const value = Math.max(0, Math.min(Number(seconds) || 0, this.duration || Number(seconds) || 0));
     this.position = value;
-    this.post("seekTo", [value, true]);
+    if (this.mode === "stream") {
+      try { this._audio.currentTime = value; } catch {}
+    } else {
+      this.post("seekTo", [value, true]);
+    }
     this.notify();
     return this.snapshot();
   }
@@ -1016,13 +1308,24 @@ class YouTubeEngine {
   setVolume(percent) {
     const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
     this.volume = value;
-    this.post("setVolume", [value]);
+    if (this.mode === "stream") {
+      try { this._audio.volume = value / 100; } catch {}
+    } else {
+      this.post("setVolume", [value]);
+    }
     this.notify();
     return this.snapshot();
   }
 
   stop() {
-    this.post("stopVideo");
+    this._streamToken++;
+    this.loading = false;
+    if (this.mode === "loading") this.mode = "none";
+    if (this.mode === "stream") {
+      try { this._audio.pause(); this._audio.currentTime = 0; } catch {}
+    } else {
+      this.post("stopVideo");
+    }
     clearTimeout(this._autoplayTimer);
     clearTimeout(this._muteTimer);
     this._autoplayTimer = 0;
@@ -1037,6 +1340,10 @@ class YouTubeEngine {
   }
 
   clearQueue() {
+    this._streamToken++;
+    this.clearAudio();
+    this.mode = "none";
+    this.loading = false;
     clearTimeout(this._autoplayTimer);
     clearTimeout(this._muteTimer);
     this._autoplayTimer = 0;
@@ -1463,6 +1770,14 @@ class YouTubePanel {
           value: JSON.stringify(this.settings.musicBotCommands || {}),
         },
         {
+          type: "dropdown",
+          id: "audioSource",
+          name: "Audio source",
+          note: "Stream extraction also plays label-blocked videos. Embed is the official player.",
+          value: AUDIO_SOURCES.some((source) => source.id === this.settings.audioSource) ? this.settings.audioSource : "auto",
+          options: AUDIO_SOURCES.map((source) => ({ label: source.label, value: source.id })),
+        },
+        {
           type: "number",
           id: "height",
           name: "Panel height (px)",
@@ -1492,6 +1807,8 @@ class YouTubePanel {
           this.settings.musicBotId = String(value || "jockie");
           this.settings.musicBotPrefix = "";
           this.settings.musicBotCommands = {};
+        } else if (id === "audioSource") {
+          this.settings.audioSource = AUDIO_SOURCES.some((source) => source.id === value) ? value : "auto";
         } else this.settings[id] = value;
         this.save();
         this._bump?.();
@@ -1847,10 +2164,12 @@ function App({ plugin }) {
     ),
     state?.blocked
       ? h("div", { className: "yp-error" },
-          (state?.muted && state?.gotInfo)
-            ? "YouTube started muted. "
-            : "YouTube did not start. This video may be blocked from embeds. ",
-          (state?.muted && state?.gotInfo) ? h("button", {
+          state?.mode === "stream"
+            ? "Audio did not start. "
+            : (state?.muted && state?.gotInfo)
+              ? "YouTube started muted. "
+              : "YouTube did not start. This video may be blocked from embeds. ",
+          (state?.mode === "stream" || (state?.muted && state?.gotInfo)) ? h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.enableSound(),
           }, "Enable sound") : null,
@@ -1858,15 +2177,16 @@ function App({ plugin }) {
             className: "yp-textbtn",
             onClick: async () => { await sendBotCommand("play"); },
           }, "Send to bot") : null,
-          h("button", {
+          state?.mode !== "stream" ? h("button", {
             className: "yp-textbtn",
             onClick: () => plugin.engine.setVideoVisible(!state.videoVisible),
-          }, state.videoVisible ? "Hide video" : "Show video"),
+          }, state.videoVisible ? "Hide video" : "Show video") : null,
           track ? h("button", {
             className: "yp-textbtn",
             onClick: () => openExternal(track.url),
           }, "Open on YouTube") : null)
       : null,
+    state?.loading ? h("div", { className: "yp-notice" }, "Loading audio stream...") : null,
     notice ? h("div", { className: "yp-notice" }, notice) : null,
     (error || engineError) ? h("div", { className: "yp-error" },
       error || engineError,
@@ -2153,6 +2473,8 @@ YouTubePanel._internals = {
   normalizeYouTubeVideo,
   searchYouTube,
   resolveYouTubeTrack,
+  resolveAudioStream,
+  netFetchBuffer,
   LocalQueue,
   YouTubeEngine,
 };

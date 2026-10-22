@@ -5,27 +5,32 @@
 
 const https = require("https");
 
-function request(url, headers = {}, redirects = 0) {
+function request(url, options = {}, redirects = 0) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, {
+    const req = https.request(url, {
+      method: options.method || "GET",
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
-        ...headers,
+        ...(options.headers || {}),
       },
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 4) {
         res.resume();
-        resolve(request(new URL(res.headers.location, url).toString(), headers, redirects + 1));
+        resolve(request(new URL(res.headers.location, url).toString(), options, redirects + 1));
         return;
       }
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => body += chunk);
-      res.on("end", () => resolve({ status: res.statusCode, body }));
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        const buffer = Buffer.concat(chunks);
+        resolve({ status: res.statusCode, body: buffer.toString("utf8"), buffer, headers: res.headers });
+      });
     });
     req.on("error", reject);
     req.setTimeout(20000, () => req.destroy(new Error("request timed out")));
+    if (options.body) req.write(options.body);
+    req.end();
   });
 }
 
@@ -50,12 +55,13 @@ const BdApi = function BdApiCtor() {
 };
 BdApi.React = ReactFake;
 BdApi.Net = {
-  fetch: async (url) => {
-    const res = await request(String(url));
+  fetch: async (url, init = {}) => {
+    const res = await request(String(url), init);
     return {
       ok: res.status >= 200 && res.status < 300,
       status: res.status,
       text: async () => res.body,
+      arrayBuffer: async () => res.buffer.buffer.slice(res.buffer.byteOffset, res.buffer.byteOffset + res.buffer.byteLength),
     };
   },
 };
@@ -65,7 +71,7 @@ global.document = { querySelectorAll: () => [], createElement: () => ({ style: {
 global.location = { origin: "https://ptb.discord.com", href: "https://ptb.discord.com/channels/1/2" };
 
 const YouTubePanel = require("../YouTubePanel.plugin.js");
-const { searchYouTube, resolveYouTubeTrack } = YouTubePanel._internals;
+const { searchYouTube, resolveYouTubeTrack, resolveAudioStream, netFetchBuffer } = YouTubePanel._internals;
 
 (async () => {
   let failures = 0;
@@ -82,6 +88,12 @@ const { searchYouTube, resolveYouTubeTrack } = YouTubePanel._internals;
   const track = await resolveYouTubeTrack(search.items[0].id);
   check(!!track.title && track.title !== "YouTube video " + track.id, "oEmbed resolves the title");
   check(track.thumbnail.includes("ytimg"), "oEmbed resolves a thumbnail");
+
+  const stream = await resolveAudioStream("K0HSD_i2DvA");
+  check(!!stream.url && stream.url.includes("googlevideo.com"), "UMG-blocked video resolves an audio URL");
+  console.log("audio:", stream.itag, stream.mimeType, "bytes=" + stream.contentLength);
+  const bytes = await netFetchBuffer(stream.url, { Range: "bytes=0-262143" });
+  check(bytes && bytes.byteLength > 0, "audio bytes are fetchable");
 
   if (failures) process.exitCode = 1;
 })();

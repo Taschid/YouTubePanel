@@ -47,22 +47,41 @@ const iframeWindow = {
 };
 
 function makeElement(tag) {
+  const listeners = {};
   const el = {
     tagName: String(tag).toUpperCase(),
     style: {},
     children: [],
     attrs: {},
     isConnected: true,
+    paused: true,
+    ended: false,
+    currentTime: 0,
+    duration: NaN,
+    volume: 1,
+    muted: false,
+    preload: "",
+    src: "",
     contentWindow: String(tag).toLowerCase() === "iframe" ? iframeWindow : undefined,
+    _events: listeners,
     appendChild(child) { this.children.push(child); return child; },
     remove() { this.isConnected = false; },
     setAttribute(key, value) { this.attrs[key] = value; },
-    addEventListener() {},
-    removeEventListener() {},
+    removeAttribute(key) { delete this.attrs[key]; if (key === "src") this.src = ""; },
+    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+    removeEventListener(type, fn) { listeners[type] = (listeners[type] || []).filter((f) => f !== fn); },
+    emit(type) { for (const fn of listeners[type] || []) fn({ type, target: this }); },
+    play() { this.paused = false; this.ended = false; this.emit("play"); return Promise.resolve(); },
+    pause() { this.paused = true; this.emit("pause"); },
+    load() {},
   };
   domElements.push(el);
   return el;
 }
+
+if (!global.URL) global.URL = require("url").URL;
+global.URL.createObjectURL = () => "blob:youtubepanel-test";
+global.URL.revokeObjectURL = () => {};
 
 global.document = {
   body: {
@@ -123,6 +142,8 @@ const searchHtml = "<!doctype html><script>var ytInitialData = " + JSON.stringif
 }) + ";</script>";
 
 const netCalls = [];
+const netRequests = [];
+let failPlayer = false;
 const BdApi = function BdApiCtor() {
   return {
     Data: {
@@ -142,9 +163,39 @@ const BdApi = function BdApiCtor() {
 };
 BdApi.React = ReactFake;
 BdApi.Net = {
-  fetch: async (url) => {
+  fetch: async (url, init = {}) => {
     const value = String(url);
     netCalls.push(value);
+    netRequests.push({ url: value, init });
+    if (value.includes("/watch?")) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => "<script>var ytcfg={\"visitorData\":\"test-visitor\"};</script>",
+      };
+    }
+    if (value.includes("/youtubei/v1/player")) {
+      if (failPlayer) return { ok: false, status: 500, text: async () => "player failed" };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          playabilityStatus: { status: "OK" },
+          streamingData: {
+            adaptiveFormats: [
+              { itag: 140, mimeType: "audio/mp4; codecs=\"mp4a.40.2\"", url: "https://rr.example.googlevideo.com/videoplayback?x=1", contentLength: "3" },
+            ],
+          },
+        }),
+      };
+    }
+    if (value.includes("googlevideo.com")) {
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      };
+    }
     if (value.includes("/results?")) {
       return { ok: true, status: 200, text: async () => searchHtml };
     }
@@ -224,6 +275,7 @@ const {
   assert(plugin.settings.hotkey.join("+").toLowerCase() === "alt+q", "legacy hotkey migrates to Alt+Q");
   assert(plugin.engine && typeof plugin.engine.snapshot === "function", "local engine is created");
   plugin.engine.start();
+  assert(typeof listeners.message === "function", "engine start registers the message listener: " + Object.keys(listeners).join(","));
 
   // ------------------------------------------------------------- search/net
   const search = await plugin.search("daft punk");
@@ -234,9 +286,52 @@ const {
   await plugin.search("daft punk");
   assert(netCalls.filter((url) => url.includes("/results?")).length === resultCalls, "search results are cached");
 
-  // --------------------------------------------------------------- playback
+  // ---------------------------------------------------------- stream playback
   const state = await plugin.play(parsed[0]);
   assert(state.track.id === parsed[0].id && state.queue.items.length === 1, "play replaces the queue");
+  await wait(50);
+  assert(plugin.state().mode === "stream", "auto source selects stream extraction");
+  assert(netRequests.some((req) => req.url.includes("/youtubei/v1/player")), "Innertube player is requested");
+  assert(netRequests.some((req) => req.init.headers && req.init.headers["X-Goog-Visitor-Id"] === "test-visitor"), "visitorData is sent");
+  const audio = domElements.find((el) => el.tagName === "AUDIO");
+  assert(!!audio && audio.src === "blob:youtubepanel-test", "audio blob is attached");
+  assert(plugin.state().isPlaying === true, "stream starts playing");
+  audio.duration = 242;
+  audio.currentTime = 12.5;
+  audio.emit("timeupdate");
+  await wait();
+  assert(plugin.state().position === 12.5 && plugin.state().duration === 242, "audio timeupdate updates state");
+  plugin.pause();
+  assert(audio.paused === true, "stream pause pauses audio");
+  plugin.resume();
+  assert(audio.paused === false, "stream resume plays audio");
+  plugin.seek(42.5);
+  assert(audio.currentTime === 42.5, "stream seek changes currentTime");
+  plugin.setVolume(55.4);
+  assert(Math.abs(audio.volume - 0.55) < 0.01, "stream volume changes audio volume");
+  plugin.repeat("one");
+  assert(plugin.state().repeat === "one", "repeat state is stored");
+  audio.ended = true;
+  audio.currentTime = 242;
+  audio.emit("ended");
+  await wait();
+  assert(audio.currentTime === 0 && audio.paused === false, "stream repeat-one restarts audio");
+  plugin.engine.stop();
+  assert(audio.paused === true, "stream stop pauses audio");
+
+  plugin.settings.audioSource = "auto";
+  failPlayer = true;
+  await plugin.play(parsed[1]);
+  await wait(20);
+  assert(plugin.state().mode === "embed", "stream failure falls back to embed");
+  assert(domElements.some((el) => el.tagName === "IFRAME" && el.src.includes("dwDns8x3Jb4")), "fallback embeds the failed track");
+  failPlayer = false;
+
+  // ---------------------------------------------------------- embed fallback
+  plugin.settings.audioSource = "embed";
+  await plugin.play(parsed[0]);
+  await wait(10);
+  assert(plugin.state().mode === "embed", "embed source selects the iframe");
   assert(plugin.state().gotInfo === false, "gotInfo starts false");
   const iframe = domElements.find((el) => el.tagName === "IFRAME");
   assert(!!iframe, "iframe is created");
@@ -245,6 +340,7 @@ const {
   assert(iframe.src.includes("mute=1"), "iframe starts muted for autoplay");
   assert(iframe.attrs.allow.includes("autoplay"), "iframe allows autoplay");
   assert(posted.some((msg) => msg.event === "listening" && msg.channel === "widget"), "iframe API handshake is sent");
+  assert(typeof listeners.message === "function", "iframe message listener is registered: " + Object.keys(listeners).join(","));
 
   const deliver = async (info) => {
     listeners.message({
@@ -259,7 +355,7 @@ const {
   const live = plugin.state();
   assert(live.isPlaying && live.position === 12.5 && live.duration === 242, "infoDelivery updates state");
   assert(live.gotInfo === true, "gotInfo turns true after player info");
-  assert(posted.some((msg) => msg.func === "setVolume" && msg.args[0] === 70), "initial volume is pushed");
+  assert(posted.some((msg) => msg.func === "setVolume" && msg.args[0] === 55), "initial volume is pushed");
   assert(posted.some((msg) => msg.func === "unMute"), "player is unmuted after it starts");
   const beforeSound = posted.length;
   plugin.engine.enableSound();
@@ -277,9 +373,6 @@ const {
   assert(!!seekCommand && plugin.state().position === 42.5, "seek maps to seekTo");
   plugin.setVolume(55.4);
   assert(posted[posted.length - 1].func === "setVolume" && posted[posted.length - 1].args[0] === 55, "volume is clamped and pushed");
-  plugin.repeat("one");
-  assert(plugin.state().repeat === "one", "repeat state is stored");
-
   await deliver({ playerState: 0, currentTime: 242, duration: 242 });
   await wait(20);
   assert(posted.filter((msg) => msg.func === "playVideo").length >= 2, "repeat one replays at the end");
@@ -350,12 +443,17 @@ const {
   const panel = plugin.getSettingsPanel();
   const field = (id) => panel.settings.find((s) => s.id === id);
   assert(!field("sidecarUrl") && !field("sidecarToken"), "settings have no sidecar fields");
+  assert(field("audioSource").type === "dropdown" && field("audioSource").options.length === 3, "settings have audio source options");
   assert(field("musicBotId").type === "dropdown" && field("musicBotId").options.length === 4, "settings have the bot dropdown");
   assert(field("musicBotCommands") && field("hotkey"), "settings have overrides and hotkey");
   panel.onChange("", "musicBotId", "jmusicbot");
   assert(plugin.settings.musicBotId === "jmusicbot" && Object.keys(plugin.settings.musicBotCommands).length === 0, "bot change resets overrides");
   assert(saved.some(([key, value]) => key === "settings" && value.musicBotId === "jmusicbot"), "bot change is saved");
   plugin.settings.musicBotId = "jockie";
+  panel.onChange("", "audioSource", "stream");
+  assert(plugin.settings.audioSource === "stream", "audio source changes");
+  panel.onChange("", "audioSource", "embed");
+  assert(plugin.settings.audioSource === "embed", "audio source saves embed mode");
 
   // ------------------------------------------------------------ coexistence
   let hidden = 0;
