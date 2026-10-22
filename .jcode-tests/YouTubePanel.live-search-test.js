@@ -71,7 +71,7 @@ global.document = { querySelectorAll: () => [], createElement: () => ({ style: {
 global.location = { origin: "https://ptb.discord.com", href: "https://ptb.discord.com/channels/1/2" };
 
 const YouTubePanel = require("../YouTubePanel.plugin.js");
-const { searchYouTube, resolveYouTubeTrack, resolveAudioStream, netFetchBuffer } = YouTubePanel._internals;
+const { searchYouTube, resolveYouTubeTrack, resolveAudioStream, netFetchBuffer, verifyYouTubeLogin } = YouTubePanel._internals;
 
 (async () => {
   let failures = 0;
@@ -94,6 +94,9 @@ const { searchYouTube, resolveYouTubeTrack, resolveAudioStream, netFetchBuffer }
   console.log("audio:", stream.itag, stream.mimeType, "bytes=" + stream.contentLength);
   const bytes = await netFetchBuffer(stream.url, { Range: "bytes=0-262143" });
   check(bytes && bytes.byteLength > 0, "audio bytes are fetchable");
+
+  const badLogin = await verifyYouTubeLogin("SID=not-a-real-cookie");
+  check(badLogin.ok === false, "invalid cookie is rejected");
 
   if (failures) process.exitCode = 1;
 })();

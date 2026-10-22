@@ -1,6 +1,6 @@
 # YouTubePanel standalone spec
 
-Status: v0.3.1 (2026-10-22)
+Status: v0.4.0 (2026-10-22)
 Scope: one-file BetterDiscord plugin; no sidecar, mpv, yt-dlp, Node server, or
 localhost process.
 
@@ -61,6 +61,14 @@ User-Agent. Audio preference: itag 140 (AAC 128k), then 251 (Opus), 139
 
 The VISIONOS client is not an embed client, so the publisher's
 `playableInEmbed` flag is not applied. This is why UMG-blocked videos resolve.
+
+### Account login
+
+- Optional pasted YouTube `Cookie` header.
+- Sent to watch/player requests only; never to googlevideo.
+- Cookie-only first; `SAPISIDHASH` retry on `LOGIN_REQUIRED`.
+- Accepts a raw header or Netscape cookies.txt (including `#HttpOnly_` entries).
+- Stored in plugin settings as plaintext; masked in the UI and never logged.
 
 ## 4. iframe fallback protocol
 
@@ -161,7 +169,7 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 ## 9. Validation checklist
 
 - `node --check YouTubePanel.plugin.js`
-- `.jcode-tests/YouTubePanel.lifecycle-test.js` (103 assertions)
+- `.jcode-tests/YouTubePanel.lifecycle-test.js` (112 assertions)
 - `.jcode-tests/YouTubePanel.live-search-test.js` (network)
 - Live resolver: VISIONOS `OK`, itag 140 URL, ranged byte fetch.
 - Headless Chrome: listening handshake, `initialDelivery`, `infoDelivery`,

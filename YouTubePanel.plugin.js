@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
  * @description Standalone YouTube / YouTube Music controller for Discord with stream extraction and embed fallback. No sidecar, mpv, or yt-dlp.
- * @version 0.3.1
+ * @version 0.4.0
  * @author jcode
  * @authorId 0
  */
@@ -24,6 +24,7 @@ const DEFAULT_SETTINGS = {
   topOffset: 12,
   volume: 70,
   audioSource: "auto",
+  youtubeCookie: "",
 };
 
 const AUDIO_SOURCES = [
@@ -290,6 +291,7 @@ const CSS = `
 .yp-settings { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 0 12px; }
 .yp-template-list { display: flex; flex-direction: column; gap: 8px; padding: 2px 0; }
 .yp-template-row { display: flex; flex-direction: column; gap: 3px; }
+.yp-cookie { min-height: 64px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 10px; line-height: 1.35; }
 `;
 
 // ------------------------------------------------------------------ helpers
@@ -335,7 +337,42 @@ const YT_VISIONOS_CONTEXT = {
   hl: "en",
   gl: "US",
 };
-let visitorCache = { value: "", at: 0 };
+let visitorCache = { value: "", at: 0, auth: "" };
+
+function normalizeYouTubeCookie(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return "";
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && (!line.startsWith("#") || line.startsWith("#HttpOnly_")));
+  if (lines.some((line) => line.includes("\t"))) {
+    return lines.map((line) => {
+      const parts = line.replace(/^#HttpOnly_/, "").split("\t");
+      return parts.length >= 7 ? parts[5] + "=" + parts[6] : "";
+    }).filter(Boolean).join("; ");
+  }
+  return raw.replace(/^cookie:\s*/i, "").replace(/\s+/g, " ").trim();
+}
+
+function youtubeCookieValue(cookie, name) {
+  const match = String(cookie || "").match(new RegExp("(?:^|;\\s*)" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=([^;]*)"));
+  return match ? match[1] : "";
+}
+
+async function youtubeAuthHeaders(cookie, signed = false) {
+  const normalized = normalizeYouTubeCookie(cookie);
+  if (!normalized) return {};
+  const headers = { Cookie: normalized };
+  try {
+    const sapisid = youtubeCookieValue(normalized, "SAPISID") || youtubeCookieValue(normalized, "__Secure-3PAPISID");
+    if (signed && sapisid && typeof crypto !== "undefined" && crypto.subtle) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const text = timestamp + " " + sapisid + " https://www.youtube.com";
+      const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text));
+      const hash = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      headers.Authorization = "SAPISIDHASH " + timestamp + "_" + hash;
+    }
+  } catch {}
+  return headers;
+}
 
 function canonicalWatchUrl(id) {
   return "https://www.youtube.com/watch?v=" + id;
@@ -516,35 +553,39 @@ async function netFetchBuffer(url, headers = {}, options = {}) {
   }
 }
 
-async function getYouTubeVisitorData(id) {
-  if (visitorCache.value && Date.now() - visitorCache.at < 30 * 60 * 1000) return visitorCache.value;
+async function getYouTubeVisitorData(id, cookie = "") {
+  const authKey = normalizeYouTubeCookie(cookie) ? "auth" : "anon";
+  if (visitorCache.value && visitorCache.auth === authKey && Date.now() - visitorCache.at < 30 * 60 * 1000) return visitorCache.value;
+  const auth = await youtubeAuthHeaders(cookie);
   const url = "https://www.youtube.com/watch?v=" + encodeURIComponent(id) + "&hl=en&gl=US";
   let html = "";
   try {
     html = await netFetchText(url, {
+      ...auth,
       "Accept-Language": "en-US,en;q=0.9",
       "User-Agent": YT_WEB_UA,
-      "Cookie": "CONSENT=YES+1",
+      "Cookie": [auth.Cookie, "CONSENT=YES+1"].filter(Boolean).join("; "),
     });
   } catch {
-    html = await netFetchText(url);
+    html = await netFetchText(url, auth);
   }
   let match = html.match(/visitorData":"([^"]+)"/);
   if (!match) {
     try {
-      const home = await netFetchText("https://www.youtube.com/?hl=en&gl=US");
+      const home = await netFetchText("https://www.youtube.com/?hl=en&gl=US", auth);
       match = home.match(/visitorData":"([^"]+)"/);
     } catch {}
   }
   if (!match) throw new Error("YouTube did not provide visitorData");
-  visitorCache = { value: match[1], at: Date.now() };
+  visitorCache = { value: match[1], at: Date.now(), auth: authKey };
   return match[1];
 }
 
-async function resolveAudioStream(id) {
+async function resolveAudioStream(id, cookie = "") {
   const videoId = videoIdFromUrl(id);
   if (!videoId) throw new Error("not a YouTube video URL or id");
-  const visitorData = await getYouTubeVisitorData(videoId);
+  const auth = await youtubeAuthHeaders(cookie);
+  const visitorData = await getYouTubeVisitorData(videoId, cookie);
   const payload = {
     context: { client: { ...YT_VISIONOS_CONTEXT, visitorData } },
     videoId,
@@ -553,25 +594,37 @@ async function resolveAudioStream(id) {
   };
   const playerUrl = "https://www.youtube.com/youtubei/v1/player?key=" + YT_INNERTUBE_KEY;
   const playerOptions = { method: "POST", body: JSON.stringify(payload) };
-  let text;
-  try {
-    text = await netFetchText(playerUrl, {
-      "Content-Type": "application/json",
-      "User-Agent": YT_VISIONOS_UA,
-      "X-Goog-Visitor-Id": visitorData,
-      "X-Goog-Api-Format-Version": "2",
-    }, playerOptions);
-  } catch {
-    text = await netFetchText(playerUrl, {
-      "Content-Type": "application/json",
-      "X-Goog-Visitor-Id": visitorData,
-    }, playerOptions);
+  const postPlayer = async (headers) => {
+    try {
+      return await netFetchText(playerUrl, {
+        ...headers,
+        "Content-Type": "application/json",
+        "User-Agent": YT_VISIONOS_UA,
+        "X-Goog-Visitor-Id": visitorData,
+        "X-Goog-Api-Format-Version": "2",
+      }, playerOptions);
+    } catch {
+      return await netFetchText(playerUrl, {
+        ...headers,
+        "Content-Type": "application/json",
+        "X-Goog-Visitor-Id": visitorData,
+      }, playerOptions);
+    }
+  };
+  const parsePlayer = (text) => {
+    try { return JSON.parse(text); } catch { throw new Error("YouTube player returned invalid JSON"); }
+  };
+  let data = parsePlayer(await postPlayer(auth));
+  let status = data?.playabilityStatus?.status;
+  if (status === "LOGIN_REQUIRED" && normalizeYouTubeCookie(cookie)) {
+    const signed = await youtubeAuthHeaders(cookie, true);
+    if (signed.Authorization) {
+      data = parsePlayer(await postPlayer(signed));
+      status = data?.playabilityStatus?.status;
+    }
   }
-  let data;
-  try { data = JSON.parse(text); } catch { throw new Error("YouTube player returned invalid JSON"); }
-  const status = data?.playabilityStatus?.status;
   if (status !== "OK") {
-    if (status === "LOGIN_REQUIRED") visitorCache = { value: "", at: 0 };
+    if (status === "LOGIN_REQUIRED") visitorCache = { value: "", at: 0, auth: "" };
     throw new Error("YouTube stream " + (status || "failed") + ": " + (data?.playabilityStatus?.reason || "unavailable"));
   }
   const formats = Array.isArray(data?.streamingData?.adaptiveFormats) ? data.streamingData.adaptiveFormats : [];
@@ -589,13 +642,45 @@ async function resolveAudioStream(id) {
   };
 }
 
+async function verifyYouTubeLogin(cookie) {
+  if (!normalizeYouTubeCookie(cookie)) return { ok: false, error: "no Cookie header saved" };
+  const auth = await youtubeAuthHeaders(cookie);
+  const payload = {
+    context: {
+      client: {
+        clientName: "WEB",
+        clientVersion: "2.20241010.00.00",
+        hl: "en",
+        gl: "US",
+      },
+    },
+    deviceTheme: "USER_INTERFACE_THEME_DARK",
+  };
+  try {
+    const text = await netFetchText(
+      "https://www.youtube.com/youtubei/v1/account/account_menu?key=" + YT_INNERTUBE_KEY + "&prettyPrint=false",
+      { ...auth, "Content-Type": "application/json", "X-Goog-Api-Format-Version": "2" },
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+    const data = JSON.parse(text);
+    const names = [
+      ...walkYouTubeObjects(data, "accountName"),
+      ...walkYouTubeObjects(data, "email"),
+    ].map(youTubeText).filter(Boolean);
+    if (names.length) return { ok: true, name: String(names[0]).trim() };
+    return { ok: false, error: "cookie is not signed in" };
+  } catch {
+    return { ok: false, error: "login check failed" };
+  }
+}
+
 async function searchYouTube(query) {
   const q = String(query || "").trim();
   if (!q) return { items: [] };
   const url = "https://www.youtube.com/results?search_query=" + encodeURIComponent(q) + "&hl=en&gl=US";
   const html = await netFetchText(url);
   const visitor = html.match(/visitorData":"([^"]+)"/);
-  if (visitor) visitorCache = { value: visitor[1], at: Date.now() };
+  if (visitor) visitorCache = { value: visitor[1], at: Date.now(), auth: "anon" };
   const data = extractYouTubeInitialData(html);
   if (!data) throw new Error("YouTube returned a consent or captcha page. Paste a video URL instead.");
   const items = parseYouTubeSearchData(data);
@@ -908,7 +993,7 @@ class YouTubeEngine {
   }
 
   retryStream() {
-    visitorCache = { value: "", at: 0 };
+    visitorCache = { value: "", at: 0, auth: "" };
     if (!this.track) return this.snapshot();
     this.plugin.settings.audioSource = "auto";
     this.plugin.save();
@@ -977,7 +1062,7 @@ class YouTubeEngine {
     this.streamError = "";
     this.notify();
     try {
-      const stream = await resolveAudioStream(track.id);
+      const stream = await resolveAudioStream(track.id, this.plugin.settings.youtubeCookie);
       if (token !== this._streamToken) return;
       const buffer = await netFetchBuffer(stream.url, { "User-Agent": YT_VISIONOS_UA });
       if (token !== this._streamToken) return;
@@ -1489,6 +1574,18 @@ class YouTubePanel {
 
   // ------------------------------------------------------- local playback
   state() { return this.engine.snapshot(); }
+  setYouTubeCookie(value) {
+    this.settings.youtubeCookie = normalizeYouTubeCookie(value);
+    visitorCache = { value: "", at: 0, auth: "" };
+    this.save();
+    return this.settings.youtubeCookie;
+  }
+  clearYouTubeCookie() {
+    this.settings.youtubeCookie = "";
+    visitorCache = { value: "", at: 0, auth: "" };
+    this.save();
+  }
+  verifyYouTubeLogin() { return verifyYouTubeLogin(this.settings.youtubeCookie); }
   search(q) {
     const key = String(q || "").trim().toLowerCase();
     const cached = this._searchCache.get(key);
@@ -1877,6 +1974,10 @@ function App({ plugin }) {
   const [notice, setNotice] = useState("");
   const [volume, setVolume] = useState(Number(plugin.settings.volume) || 70);
   const [channelDraft, setChannelDraft] = useState(String(plugin.settings.musicChannelId || ""));
+  const [cookieDraft, setCookieDraft] = useState("");
+  const [cookieStatus, setCookieStatus] = useState(plugin.settings.youtubeCookie ? "Cookie saved. Test login or play a restricted video." : "Not signed in. Restricted videos fall back to the embed.");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [showCookie, setShowCookie] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [botMenuOpen, setBotMenuOpen] = useState(false);
   const [botNotice, setBotNotice] = useState(null);
@@ -2120,6 +2221,47 @@ function App({ plugin }) {
     flashNotice("music channel saved", 3000);
   };
 
+  const openYouTubeLogin = () => {
+    openExternal("https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F");
+  };
+
+  const saveYouTubeCookie = () => {
+    const saved = plugin.setYouTubeCookie(cookieDraft);
+    setCookieDraft("");
+    setCookieStatus(saved ? "Cookie saved. Test login or play a restricted video." : "Not signed in. Restricted videos fall back to the embed.");
+    flashNotice(saved ? "YouTube login saved (hidden)" : "YouTube login cleared", 3500);
+  };
+
+  const testYouTubeCookie = async () => {
+    if (loginBusy) return;
+    if (cookieDraft.trim()) {
+      plugin.setYouTubeCookie(cookieDraft);
+      setCookieDraft("");
+    }
+    setLoginBusy(true);
+    setCookieStatus("Checking login...");
+    try {
+      const result = await plugin.verifyYouTubeLogin();
+      if (result.ok) {
+        setCookieStatus("Signed in as " + result.name + ".");
+        flashNotice("YouTube login verified", 3500);
+      } else {
+        setCookieStatus("Login check failed: " + (result.error || "not signed in"));
+      }
+    } catch {
+      setCookieStatus("Login check failed. Cookie saved; playback will test it.");
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  const clearYouTubeCookie = () => {
+    plugin.clearYouTubeCookie();
+    setCookieDraft("");
+    setCookieStatus("Not signed in. Restricted videos fall back to the embed.");
+    flashNotice("YouTube login cleared", 3000);
+  };
+
   // ---------------------------------------------------------------- views
   const miniBar = h("div", {
     className: "yp-mini",
@@ -2205,6 +2347,10 @@ function App({ plugin }) {
             className: "yp-textbtn",
             onClick: () => plugin.engine.enableSound(),
           }, "Enable sound") : null,
+          /LOGIN_REQUIRED|Sign in/i.test(state?.streamError || "") ? h("button", {
+            className: "yp-textbtn",
+            onClick: () => setView("settings"),
+          }, "Sign in") : null,
           track ? h("button", {
             className: "yp-textbtn",
             onClick: async () => { await sendBotCommand("play"); },
@@ -2313,7 +2459,31 @@ function App({ plugin }) {
     h("div", { className: "yp-settings" },
       h("div", { className: "yp-label" }, "Standalone player"),
       h("div", { className: "yp-hint" },
-        "v0.3.1 - no sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
+        "v0.4.0 - no sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
+
+      h("div", { className: "yp-sep" }),
+      h("div", { className: "yp-label" }, "YouTube account"),
+      h("div", { className: "yp-hint" }, cookieStatus),
+      h("textarea", {
+        className: "yp-input yp-cookie",
+        rows: 3,
+        spellCheck: false,
+        placeholder: plugin.settings.youtubeCookie
+          ? "Cookie saved (hidden). Paste a new Cookie header to replace it."
+          : "Paste the Cookie header from a logged-in youtube.com request.",
+        value: cookieDraft,
+        onChange: (e) => setCookieDraft(e.target.value),
+        style: showCookie ? {} : { WebkitTextSecurity: "disc" },
+      }),
+      h("div", { className: "yp-row2" },
+        h("button", { className: "yp-textbtn", onClick: openYouTubeLogin }, "Open YouTube login"),
+        h("button", { className: "yp-textbtn", onClick: () => setShowCookie(!showCookie) }, showCookie ? "Hide cookie" : "Show cookie")),
+      h("div", { className: "yp-row2" },
+        h("button", { className: "yp-primary", disabled: !cookieDraft.trim(), onClick: saveYouTubeCookie }, "Save login"),
+        h("button", { className: "yp-textbtn", disabled: loginBusy, onClick: testYouTubeCookie }, loginBusy ? "Testing..." : "Test login"),
+        h("button", { className: "yp-textbtn", onClick: clearYouTubeCookie }, "Clear")),
+      h("div", { className: "yp-hint" },
+        "Open YouTube login, then use DevTools > Network > any youtube.com request > Request Headers > Cookie, and paste that value here. It is stored locally in plaintext and grants account access. Use a dedicated account; never share it."),
 
       h("div", { className: "yp-sep" }),
       h("div", { className: "yp-label" }, "Discord music bot"),
@@ -2511,6 +2681,8 @@ YouTubePanel._internals = {
   resolveYouTubeTrack,
   resolveAudioStream,
   netFetchBuffer,
+  normalizeYouTubeCookie,
+  verifyYouTubeLogin,
   LocalQueue,
   YouTubeEngine,
 };

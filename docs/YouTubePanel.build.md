@@ -1,6 +1,6 @@
 # YouTubePanel build log
 
-Status: v0.3.1 (2026-10-22), standalone + stream extraction
+Status: v0.4.0 (2026-10-22), standalone + stream extraction + account login
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: none (legacy files remain in `tools/youtube-sidecar/`)
 Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`,
@@ -26,11 +26,13 @@ yt-dlp, and no localhost server.
   right-click opens the command sheet. Jockie/JMusicBot/MusicBot/Custom.
 - **Settings:** audio source (`Auto`, `Stream`, `Embed`), bot/channel, height,
   hotkey. No sidecar fields.
+- **Login:** optional YouTube Cookie header import for age-restricted and
+  members-only videos. Stored locally, masked, never logged.
 - **Label-blocked videos:** stream extraction plays UMG/embed-blocked videos
   in-panel. If extraction fails, the embed iframe is used, then Send to bot /
   Open on YouTube.
 
-No playlists in v0.3.0. YouTube now serves playlist items as `lockupViewModel`,
+No playlists in v0.4.0. YouTube now serves playlist items as `lockupViewModel`,
 so that needs a second parser.
 
 ## 2. Files
@@ -38,9 +40,9 @@ so that needs a second parser.
 | Path | Purpose |
 | --- | --- |
 | `YouTubePanel.plugin.js` | the entire standalone plugin |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 103-assertion offline test |
+| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 112-assertion offline test |
 | `.jcode-tests/YouTubePanel.live-search-test.js` | live search, oEmbed, stream resolver, byte fetch |
-| `tools/youtube-sidecar/` | legacy v0.1.x sidecar; unused by v0.3.0 |
+| `tools/youtube-sidecar/` | legacy v0.1.x sidecar; unused by v0.4.0 |
 
 ## 3. Architecture
 
@@ -49,6 +51,7 @@ Discord renderer (YouTubePanel.plugin.js)
   |-- BdApi.Net.fetch -> watch page + Innertube player + googlevideo (stream)
   |-- <audio> + Blob  -> resolved audio bytes
   |-- hidden iframe   -> youtube.com/embed/<id>       (fallback)
+  |-- Cookie header  -> authorized watch/player requests
   '-- BdApi.Webpack   -> sendMessage (bot bridge, unchanged)
 ```
 
@@ -64,6 +67,9 @@ Discord renderer (YouTubePanel.plugin.js)
 
 The `VISIONOS` client ignores the publisher's `playableInEmbed` flag. This is
 why UMG/label-blocked videos work. It also bypasses ads, which is a ToS risk.
+
+With a login cookie, the watch and player requests carry `Cookie` plus an
+optional `SAPISIDHASH` retry. The cookie is never sent to `googlevideo.com`.
 
 ### Embed fallback
 
@@ -94,6 +100,8 @@ Events handled: `initialDelivery`, `infoDelivery`, `onReady`,
 - Stream path keeps one hidden `<audio>` element; Blob URLs are revoked on
   track change, stop, and reload.
 - Volume is persisted and applied directly to `<audio>` or via iframe commands.
+- Optional YouTube login uses a pasted Cookie header for age-restricted and
+  members-only videos. It is stored locally, masked in the UI, and never logged.
 - Search results are cached for 2 minutes; repeated Go presses do not refetch.
 - A stalled autoplay (no playing/buffering state within 4.5s) sets `blocked` so
   the Show video fallback appears.
@@ -108,19 +116,22 @@ Events handled: `initialDelivery`, `infoDelivery`, `onReady`,
 2. Enable **YouTubePanel** in BetterDiscord (hotkey `Alt+Q`).
 3. Panel settings: choose Audio source (`Auto` by default), set the music
    channel id and bot.
-4. Search, or paste a YouTube URL. Press Play.
+4. Optional: YouTube account → Open YouTube login → paste the `Cookie` header
+   from a logged-in `youtube.com` request → Save/Test.
+5. Search, or paste a YouTube URL. Press Play.
 
 No extra install step.
 
 ## 6. Validation (2026-10-22)
 
 - `node --check YouTubePanel.plugin.js` clean.
-- **103 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
+- **112 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
   search parsing, queue semantics, settings migration, iframe URL/commands,
   listening handshake, `infoDelivery` state, VISIONOS request/headers,
   stream/audio events, stream-to-embed fallback, seek/volume, repeat, embed
   error, bot URL/query/prefix/raw/skip, missing channel/track/disabled play,
-  BD settings, coexistence.
+  cookie normalization, account-menu verification, auth headers, BD settings,
+  coexistence.
 - **Live search**: `searchYouTube("daft punk around the world")` returned 15+
   results; oEmbed resolved title and thumbnail.
 - **Live stream resolver**: the UMG-blocked `K0HSD_i2DvA` returned `OK` and
@@ -146,8 +157,14 @@ No extra install step.
   remain.
 - **Memory**: the full audio file is fetched into a Blob (about 1-4 MB per
   song). Blob URLs are revoked on change.
-- **Age/private/login**: resolver returns `LOGIN_REQUIRED`; the panel falls back
-  to the embed and then Open on YouTube.
+- **Cookie security**: the YouTube cookie is stored in plaintext in plugin
+  settings and grants account access. Use a dedicated account; never share it.
+- **Cookie expiry**: Google can invalidate it; re-import from a logged-in
+  browser request.
+- **Members-only**: may still fail if YouTube requires more session state.
+- **Age/private/login**: without a cookie, resolver returns `LOGIN_REQUIRED`
+  and the panel falls back to the embed. With a valid cookie, the signed retry
+  attempts playback; members-only may still fail.
 - **Embed-restricted videos** still fail in the embed fallback; the stream path
   is what plays them.
 - **Autoplay** can be blocked by Chromium. Show video expands the player so the
@@ -160,9 +177,9 @@ No extra install step.
 - **YouTube HTML changes** can break search parsing. URL playback still works.
 - **Consent/captcha pages** can block search depending on region/IP.
 - **Ads** may play before or during a video.
-- **No playlists** in v0.3.0.
-- **No account**; private, age-restricted, members-only and purchased content
-  is unavailable.
+- **No playlists** in v0.4.0.
+- **Optional account**: a valid cookie handles many age-restricted and
+  members-only videos; private or purchased content may still be unavailable.
 - **Audio-only**; no video mode (Show video is a fallback, not a feature).
 - **Background playback** depends on Chromium keeping the offscreen iframe
   alive in embed mode. Stream mode uses `<audio>`, which is more reliable.
@@ -182,6 +199,9 @@ No extra install step.
 
 ## 9. Version history
 
+- **0.4.0**: optional YouTube Cookie login for age-restricted/members-only
+  videos, cookie normalization, account-menu verification, staged
+  `SAPISIDHASH` retry, masked account UI, and login-required CTA.
 - **0.3.1**: reuse `visitorData` from the search page, harden watch-page
   fallbacks, expose `Stream:` errors, add Retry stream, and show the build
   version in settings.

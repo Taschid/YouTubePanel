@@ -189,6 +189,27 @@ BdApi.Net = {
         }),
       };
     }
+    if (value.includes("/account/account_menu")) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          actions: [{
+            openPopupAction: {
+              popup: {
+                multiPageMenuRenderer: {
+                  header: {
+                    activeAccountHeaderRenderer: {
+                      accountName: { runs: [{ text: "Test User" }] },
+                    },
+                  },
+                },
+              },
+            },
+          }],
+        }),
+      };
+    }
     if (value.includes("googlevideo.com")) {
       return {
         ok: true,
@@ -221,6 +242,8 @@ const {
   parseYouTubeDuration,
   extractYouTubeInitialData,
   parseYouTubeSearchData,
+  normalizeYouTubeCookie,
+  verifyYouTubeLogin,
   LocalQueue,
 } = YouTubePanel._internals;
 
@@ -232,6 +255,11 @@ const {
   assert(videoIdFromUrl("https://www.youtube.com/shorts/K0HSD_i2DvA") === "K0HSD_i2DvA", "Shorts URL parses");
   assert(videoIdFromUrl("K0HSD_i2DvA") === "K0HSD_i2DvA", "raw id parses");
   assert(videoIdFromUrl("https://example.com/video") === "", "non-YouTube URL is rejected");
+  assert(normalizeYouTubeCookie("Cookie: SID=a; HSID=b") === "SID=a; HSID=b", "raw cookie header normalizes");
+  assert(normalizeYouTubeCookie("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta\n.youtube.com\tTRUE\t/\tTRUE\t0\tHSID\tb") === "SID=a; HSID=b", "cookies.txt normalizes");
+  assert(normalizeYouTubeCookie("#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta") === "SID=a", "HttpOnly cookies.txt entry normalizes");
+  const noCookieLogin = await verifyYouTubeLogin("");
+  assert(noCookieLogin.ok === false, "login check rejects an empty cookie");
 
   // --------------------------------------------------------------- duration
   assert(parseYouTubeDuration("4:02") === 242, "mm:ss duration parses");
@@ -319,6 +347,19 @@ const {
   assert(audio.currentTime === 0 && audio.paused === false, "stream repeat-one restarts audio");
   plugin.engine.stop();
   assert(audio.paused === true, "stream stop pauses audio");
+
+  plugin.setYouTubeCookie("SID=test; SAPISID=abc");
+  assert(plugin.settings.youtubeCookie.includes("SID=test"), "cookie is saved");
+  const login = await plugin.verifyYouTubeLogin();
+  assert(login.ok && login.name === "Test User", "account menu verifies the login");
+  await plugin.play(parsed[0]);
+  await wait(50);
+  const playerRequest = [...netRequests].reverse().find((req) => req.url.includes("/youtubei/v1/player"));
+  assert(playerRequest && playerRequest.init.headers.Cookie.includes("SID=test"), "player request sends the cookie");
+  const audioRequest = [...netRequests].reverse().find((req) => req.url.includes("googlevideo.com"));
+  assert(audioRequest && !(audioRequest.init.headers || {}).Cookie, "audio request does not send the cookie");
+  plugin.clearYouTubeCookie();
+  assert(plugin.settings.youtubeCookie === "", "cookie clears");
 
   plugin.settings.audioSource = "auto";
   failPlayer = true;

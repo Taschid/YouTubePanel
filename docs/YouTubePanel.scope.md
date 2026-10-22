@@ -1,6 +1,6 @@
 # YouTubePanel scope
 
-Status: v0.3.1 standalone + stream extraction (2026-10-22)
+Status: v0.4.0 standalone + stream extraction + account login (2026-10-22)
 Plugin: `YouTubePanel.plugin.js`
 Dependencies: BetterDiscord only (no sidecar, mpv, yt-dlp, or Node server)
 
@@ -11,7 +11,7 @@ Music without Spotify. It reuses the SpotifyPanel visual language and the
 verified Discord music-bot bridge, but it is a separate plugin and separate
 product.
 
-v0.3.1 installs as one file, resolves audio through YouTube's `VISIONOS`
+v0.4.0 installs as one file, resolves audio through YouTube's `VISIONOS`
 Innertube client, and plays it as a Blob through `<audio>`. The embedded player
 remains the fallback.
 
@@ -59,6 +59,7 @@ hiding the panel does not unmount it.
 - Panel settings: bot/channel, height, hotkey.
 - Audio source setting: Auto (stream → embed), Stream, Embed.
 - Stream extraction for label-blocked videos, with embed fallback.
+- Optional YouTube Cookie login for age-restricted and members-only videos.
 - Embed-error and autoplay fallbacks.
 - Mutual exclusion with SpotifyPanel and SideChat via `window.__jcodePanels`.
 - Hotkey `Alt+Q` by default.
@@ -72,7 +73,7 @@ hiding the panel does not unmount it.
 - Downloads or offline caching.
 - Lyrics, podcasts, recommendations, autoplay.
 - Any external process, localhost server, or bundled binary.
-- Circumventing age gates, login requirements, DRM, or paid content.
+- Circumventing age gates without authentication, DRM, or purchases.
 
 ## 6. Dependencies
 
@@ -94,9 +95,11 @@ hiding the panel does not unmount it.
 - **Search fragility:** YouTube's results HTML can change or show consent/captcha.
   URL playback remains available.
 - **Memory:** stream mode fetches the full audio file into a Blob.
+- **Cookie security:** the cookie is plaintext and grants account access; use a
+  dedicated account and never share it.
 - **Background playback:** stream mode uses `<audio>` and is reliable; embed
   mode depends on Chromium keeping the offscreen iframe alive.
-- **No playlists:** a known v0.3.0 regression from v0.1.x.
+- **No playlists:** a known v0.4.0 regression from v0.1.x.
 - **Discord reload:** BetterDiscord does not reliably hot-reload; toggle the
   plugin after replacing the file.
 
