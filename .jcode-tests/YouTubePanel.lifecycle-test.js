@@ -106,7 +106,7 @@ global.location = {
   href: "https://ptb.discord.com/channels/1/2",
 };
 
-const searchHtml = "<!doctype html><script>var ytInitialData = " + JSON.stringify({
+const searchHtml = "<!doctype html><script>var ytcfg={\"visitorData\":\"search-visitor\"};</script><script>var ytInitialData = " + JSON.stringify({
   contents: {
     twoColumnSearchResultsRenderer: {
       primaryContents: {
@@ -292,7 +292,8 @@ const {
   await wait(50);
   assert(plugin.state().mode === "stream", "auto source selects stream extraction");
   assert(netRequests.some((req) => req.url.includes("/youtubei/v1/player")), "Innertube player is requested");
-  assert(netRequests.some((req) => req.init.headers && req.init.headers["X-Goog-Visitor-Id"] === "test-visitor"), "visitorData is sent");
+  assert(netRequests.some((req) => req.init.headers && req.init.headers["X-Goog-Visitor-Id"] === "search-visitor"), "search visitorData is sent");
+  assert(!netRequests.some((req) => req.url.includes("/watch?")), "search visitorData avoids a watch-page fetch");
   const audio = domElements.find((el) => el.tagName === "AUDIO");
   assert(!!audio && audio.src === "blob:youtubepanel-test", "audio blob is attached");
   assert(plugin.state().isPlaying === true, "stream starts playing");

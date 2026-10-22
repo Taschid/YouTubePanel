@@ -1,6 +1,6 @@
 # YouTubePanel scope
 
-Status: v0.3.0 standalone + stream extraction (2026-10-22)
+Status: v0.3.1 standalone + stream extraction (2026-10-22)
 Plugin: `YouTubePanel.plugin.js`
 Dependencies: BetterDiscord only (no sidecar, mpv, yt-dlp, or Node server)
 
@@ -11,7 +11,7 @@ Music without Spotify. It reuses the SpotifyPanel visual language and the
 verified Discord music-bot bridge, but it is a separate plugin and separate
 product.
 
-v0.3.0 installs as one file, resolves audio through YouTube's `VISIONOS`
+v0.3.1 installs as one file, resolves audio through YouTube's `VISIONOS`
 Innertube client, and plays it as a Blob through `<audio>`. The embedded player
 remains the fallback.
 
@@ -47,7 +47,7 @@ rather than an embed, so `playableInEmbed=false` is not applied. This is how
 UMG/label-blocked videos play. The fallback iframe lives on `document.body`, so
 hiding the panel does not unmount it.
 
-## 4. In scope (v0.3.0)
+## 4. In scope (v0.3.1)
 
 - Public YouTube search (up to 20 results).
 - Play a YouTube, YouTube Music, Shorts, or `youtu.be` URL.
@@ -63,7 +63,7 @@ hiding the panel does not unmount it.
 - Mutual exclusion with SpotifyPanel and SideChat via `window.__jcodePanels`.
 - Hotkey `Alt+Q` by default.
 
-## 5. Out of scope (v0.3.0)
+## 5. Out of scope (v0.3.1)
 
 - Playlists. YouTube now uses `lockupViewModel`; a second parser is required.
 - YouTube account login, liked songs, subscriptions, YT Music library.

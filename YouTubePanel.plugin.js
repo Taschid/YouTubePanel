@@ -1,7 +1,7 @@
 /**
  * @name YouTubePanel
  * @description Standalone YouTube / YouTube Music controller for Discord with stream extraction and embed fallback. No sidecar, mpv, or yt-dlp.
- * @version 0.3.0
+ * @version 0.3.1
  * @author jcode
  * @authorId 0
  */
@@ -594,6 +594,8 @@ async function searchYouTube(query) {
   if (!q) return { items: [] };
   const url = "https://www.youtube.com/results?search_query=" + encodeURIComponent(q) + "&hl=en&gl=US";
   const html = await netFetchText(url);
+  const visitor = html.match(/visitorData":"([^"]+)"/);
+  if (visitor) visitorCache = { value: visitor[1], at: Date.now() };
   const data = extractYouTubeInitialData(html);
   if (!data) throw new Error("YouTube returned a consent or captcha page. Paste a video URL instead.");
   const items = parseYouTubeSearchData(data);
@@ -2311,7 +2313,7 @@ function App({ plugin }) {
     h("div", { className: "yp-settings" },
       h("div", { className: "yp-label" }, "Standalone player"),
       h("div", { className: "yp-hint" },
-        "No sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
+        "v0.3.1 - no sidecar, mpv, or yt-dlp. Auto uses stream extraction for label-blocked videos, then the YouTube embed as fallback."),
 
       h("div", { className: "yp-sep" }),
       h("div", { className: "yp-label" }, "Discord music bot"),

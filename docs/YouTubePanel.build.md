@@ -1,6 +1,6 @@
 # YouTubePanel build log
 
-Status: v0.3.0 (2026-10-22), standalone + stream extraction
+Status: v0.3.1 (2026-10-22), standalone + stream extraction
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: none (legacy files remain in `tools/youtube-sidecar/`)
 Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`,
@@ -38,7 +38,7 @@ so that needs a second parser.
 | Path | Purpose |
 | --- | --- |
 | `YouTubePanel.plugin.js` | the entire standalone plugin |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 102-assertion offline test |
+| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 103-assertion offline test |
 | `.jcode-tests/YouTubePanel.live-search-test.js` | live search, oEmbed, stream resolver, byte fetch |
 | `tools/youtube-sidecar/` | legacy v0.1.x sidecar; unused by v0.3.0 |
 
@@ -115,7 +115,7 @@ No extra install step.
 ## 6. Validation (2026-10-22)
 
 - `node --check YouTubePanel.plugin.js` clean.
-- **102 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
+- **103 lifecycle assertions**: URL parsing, duration parsing, `ytInitialData`
   search parsing, queue semantics, settings migration, iframe URL/commands,
   listening handshake, `infoDelivery` state, VISIONOS request/headers,
   stream/audio events, stream-to-embed fallback, seek/volume, repeat, embed
@@ -182,6 +182,9 @@ No extra install step.
 
 ## 9. Version history
 
+- **0.3.1**: reuse `visitorData` from the search page, harden watch-page
+  fallbacks, expose `Stream:` errors, add Retry stream, and show the build
+  version in settings.
 - **0.3.0**: VISIONOS stream extraction for UMG/label-blocked videos, Blob
   `<audio>` playback, `audioSource` setting, stream-to-embed fallback, live
   resolver/byte validation.
