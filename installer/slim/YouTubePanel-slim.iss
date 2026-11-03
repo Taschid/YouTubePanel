@@ -2,7 +2,7 @@
 #ifndef AppVersion
   #define AppVersion "0.5.3"
 #endif
-#define AppPublisher "jcode"
+#define AppPublisher "Taschid"
 
 [Setup]
 AppId={{2CC6D5C1-3D4C-4419-B23C-32983278F660}

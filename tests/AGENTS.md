@@ -19,7 +19,7 @@ arguments. Do not scrape the text; use the exit code.
 
 | File | Network | Covers |
 | --- | --- | --- |
-| `YouTubePanel.lifecycle-test.js` | no | `cleanTitle` / `normalizeTrack` / `normalizeSearch` / `Queue`, plugin start/stop, settings panel, settings persistence, hotkey registration, Discord bot bridge (`sendMusicCommand`, `sendRawMusicCommand`), panel coexistence via `window.__jcodePanels` |
+| `YouTubePanel.lifecycle-test.js` | no | `cleanTitle` / `normalizeTrack` / `normalizeSearch` / `Queue`, plugin start/stop, settings panel, settings persistence, hotkey registration, Discord bot bridge (`sendMusicCommand`, `sendRawMusicCommand`), panel coexistence via `window.__panelRegistry` |
 | `YouTubePanel.live-search-test.js` | yes + sidecar | sidecar `/health`, real `/search` (yt-dlp), and `/selftest?mode=network` (stream resolve + mpv advance). SKIPs when nothing is listening on the configured port |
 | `run-all.js` | - | runner; prints `PASS`/`FAIL` per suite, then `SUMMARY suites=N failed=M` |
 
@@ -68,7 +68,7 @@ tests already restore values such as `settings.musicChannelId`).
 
 ## Contracts that must not change casually
 
-- `window.__jcodePanels` is the cross-panel registry shared with SpotifyPanel and
+- `window.__panelRegistry` is the cross-panel registry shared with SpotifyPanel and
   SideChat. The key `youtube` and the `{ hide }` shape are part of that contract;
   renaming them breaks sibling plugins.
 - The plugin file must stay `YouTubePanel.plugin.js` at the repo root - the
@@ -87,5 +87,3 @@ tests already restore values such as `settings.musicChannelId`).
   the gate.
 - Windows paths: the plugin resolves `require`-relative paths, so run the tests
   from the repo root or let `run-all.js` set `cwd` for you.
-- `.jcode-tests` no longer exists; older notes and commits refer to it. It is
-  `tests/` now.

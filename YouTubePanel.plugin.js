@@ -2,7 +2,7 @@
  * @name YouTubePanel
  * @description Docked YouTube / YouTube Music controller for Discord, driven by a local yt-dlp + mpv sidecar.
  * @version 0.5.3
- * @author jcode
+ * @author Taschid
  * @authorId 0
  */
 
@@ -519,14 +519,14 @@ class YouTubePanel {
   // -------------------------------------------------------------- lifecycle
   registerPanel() {
     try {
-      window.__jcodePanels = window.__jcodePanels || {};
-      window.__jcodePanels.youtube = { hide: () => this.hidePanel() };
+      window.__panelRegistry = window.__panelRegistry || {};
+      window.__panelRegistry.youtube = { hide: () => this.hidePanel() };
     } catch {}
   }
 
   unregisterPanel() {
     try {
-      if (window.__jcodePanels) delete window.__jcodePanels.youtube;
+      if (window.__panelRegistry) delete window.__panelRegistry.youtube;
     } catch {}
   }
 
@@ -540,7 +540,7 @@ class YouTubePanel {
 
   hideOtherPanels() {
     try {
-      const reg = window.__jcodePanels || {};
+      const reg = window.__panelRegistry || {};
       for (const key of Object.keys(reg)) {
         if (key === "youtube") continue;
         try { reg[key]?.hide?.(); } catch {}

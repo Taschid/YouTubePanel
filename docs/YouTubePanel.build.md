@@ -22,7 +22,7 @@ Node sidecar.
 - **Discord bot:** left-click Send posts `{prefix}play <youtube-url>`; right-click
   opens the command sheet (play, pause, resume, skip, previous, repeat, shuffle,
   queue, now playing, stop, custom). Jockie/JMusicBot/MusicBot/Custom profiles.
-- **Coexistence:** registers `window.__jcodePanels.youtube`; showing YouTube hides
+- **Coexistence:** registers `window.__panelRegistry.youtube`; showing YouTube hides
   SpotifyPanel/SideChat, and startup hides the other panels so they never overlap.
   The left-edge guard is inside the panel, so it cannot be clicked through from
   the neighbouring panel. SpotifyPanel was only touched to apply the same

@@ -25,7 +25,7 @@ renderer.
   music channel; right-click opens a command sheet (play, pause, resume, skip,
   previous, repeat, shuffle, queue, now playing, stop, custom).
   Profiles for Jockie, JMusicBot, MusicBot and custom prefixes.
-- **Panel coexistence:** registers `window.__jcodePanels.youtube` and hides the
+- **Panel coexistence:** registers `window.__panelRegistry.youtube` and hides the
   neighbouring panels so they never overlap.
 - **Installer:** per-user EXE with bundled Node, `yt-dlp` and `mpv`, a free-port
   picker, startup entry, self-tests and an uninstaller.

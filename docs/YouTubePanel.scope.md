@@ -47,7 +47,7 @@ constraints in `docs/SpotifyPanel.scope.md`.
   play using `{prefix}play {url}`, right-click command sheet, custom command.
 - Panel settings: sidecar URL/token, health, bot profile/prefix/templates, channel
   id, height/hotkey (BD settings).
-- Mutual exclusion with SpotifyPanel and SideChat via `window.__jcodePanels`.
+- Mutual exclusion with SpotifyPanel and SideChat via `window.__panelRegistry`.
 - Hotkey `Alt+Q` by default.
 
 ## 5. Out of scope (v1)

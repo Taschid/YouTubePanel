@@ -253,16 +253,16 @@ global.fetch = baseFetch;
 
   // ------------------------------------------------------------ coexistence
   let hidden = 0;
-  global.window.__jcodePanels = { spotify: { hide: () => { hidden += 1; } } };
+  global.window.__panelRegistry = { spotify: { hide: () => { hidden += 1; } } };
   sp.registerPanel();
-  assert(!!global.window.__jcodePanels.youtube, "registers youtube panel");
+  assert(!!global.window.__panelRegistry.youtube, "registers youtube panel");
   sp.settings.visible = false;
   sp.togglePanel();
   assert(hidden === 1 && sp.settings.visible === true, "showing YouTube hides Spotify");
   sp.hidePanel();
   assert(sp.settings.visible === false, "hidePanel hides without toggling back");
   sp.unregisterPanel();
-  assert(!global.window.__jcodePanels.youtube, "unregister removes youtube");
+  assert(!global.window.__panelRegistry.youtube, "unregister removes youtube");
 
   console.log("done");
 })();

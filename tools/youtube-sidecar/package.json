@@ -6,6 +6,6 @@
   "main": "sidecar.js",
   "scripts": {
     "start": "node sidecar.js",
-    "test": "node ../../.jcode-tests/YouTubePanel.lifecycle-test.js"
+    "test": "node ../../tests/YouTubePanel.lifecycle-test.js"
   }
 }
