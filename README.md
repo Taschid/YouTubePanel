@@ -13,8 +13,6 @@ renderer.
 
 ![YouTubePanel docked in Discord](screenshots/discord-panel.png)
 
-![Search tab: query, results with play/add buttons, and the mini player](screenshots/search.png)
-
 ## Features
 
 - **Player panel** docked to the right edge: thumbnail, title, artist, progress,
