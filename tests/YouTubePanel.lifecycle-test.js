@@ -1,7 +1,9 @@
 "use strict";
 
 // Headless lifecycle test for YouTubePanel and its sidecar helpers.
-// Run: node .jcode-tests/YouTubePanel.lifecycle-test.js
+// Run: node tests/YouTubePanel.lifecycle-test.js   (or: node tests/run-all.js)
+// No Discord, no BetterDiscord, no network. Exits 0 on pass, 1 on any failure.
+// See tests/AGENTS.md for what is covered and how to add assertions.
 
 const assert = (cond, label) => {
   console.log((cond ? "PASS " : "FAIL ") + label);

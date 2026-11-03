@@ -73,7 +73,7 @@ paste the same value into the panel's Settings screen.
 | `tools/youtube-sidecar/lib.js` | pure metadata and queue helpers |
 | `tools/youtube-sidecar/start-youtube-panel.cmd` | launcher with dependency check |
 | `installer/` | Inno Setup script, payload scripts and build scripts |
-| `.jcode-tests/` | headless lifecycle and live-search test harnesses |
+| `tests/` | headless lifecycle and live-search harnesses (see `tests/AGENTS.md`) |
 | `docs/` | build log, installer notes, scope and legacy spec |
 
 ## Sidecar API
@@ -111,12 +111,15 @@ the smaller variant that downloads the runtime at install time.
 ## Tests
 
 ```bat
-node .jcode-tests\YouTubePanel.lifecycle-test.js
-node .jcode-tests\YouTubePanel.live-search-test.js
+node tests\run-all.js          :: offline suite
+node tests\run-all.js --live   :: offline + network suite
 ```
 
-The lifecycle test runs headless against the plugin logic. The live-search test
-needs a running sidecar plus network access.
+The lifecycle suite is headless: Discord and BetterDiscord are mocked, nothing
+listens on 8910, and it must always pass. The live suite needs the sidecar
+running (`start-youtube-panel.cmd`) plus network access, and skips cleanly when
+nothing is listening. Agents: read `tests/AGENTS.md` for what is covered, exit
+codes and how to add assertions.
 
 ## Troubleshooting
 

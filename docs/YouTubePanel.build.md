@@ -3,7 +3,7 @@
 Status: v0.5.3 (2026-10-22), packaged sidecar build
 Plugin: `YouTubePanel.plugin.js`
 Sidecar: `tools/youtube-sidecar/`
-Tests: `.jcode-tests/YouTubePanel.lifecycle-test.js`
+Tests: `tests/YouTubePanel.lifecycle-test.js` (guide: `tests/AGENTS.md`)
 Installer: `installer/YouTubePanel.iss`, `installer/build.ps1`
 
 ## 1. What shipped
@@ -38,7 +38,7 @@ Node sidecar.
 | `tools/youtube-sidecar/start-youtube-panel.cmd` | launcher + dependency check |
 | `tools/youtube-sidecar/config.example.json` | port/token/paths/volume |
 | `tools/youtube-sidecar/README.md` | setup and API reference |
-| `.jcode-tests/YouTubePanel.lifecycle-test.js` | 50-assertion headless test |
+| `tests/YouTubePanel.lifecycle-test.js` | 50-assertion headless test |
 
 ## 3. Sidecar
 

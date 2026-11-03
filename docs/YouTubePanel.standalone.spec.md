@@ -169,8 +169,9 @@ Player states: `-1` unstarted, `0` ended, `1` playing, `2` paused, `3` buffering
 ## 9. Validation checklist
 
 - `node --check YouTubePanel.plugin.js`
-- `.jcode-tests/YouTubePanel.lifecycle-test.js` (116 assertions)
-- `.jcode-tests/YouTubePanel.live-search-test.js` (network)
+- `tests/YouTubePanel.lifecycle-test.js` (116 assertions)
+- `tests/YouTubePanel.live-search-test.js` (network)
+- Aggregate runner: `node tests/run-all.js [--live]` (see `tests/AGENTS.md`)
 - Live resolver: VISIONOS `OK`, itag 140 URL, ranged byte fetch.
 - Headless Chrome: listening handshake, `initialDelivery`, `infoDelivery`,
   `onReady`, 2x2 host, embed error 150.
