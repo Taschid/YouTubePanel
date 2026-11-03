@@ -11,6 +11,8 @@ renderer.
 
 ![status](https://img.shields.io/badge/version-0.5.3-informational)
 
+![YouTubePanel docked in Discord](screenshots/discord-panel.png)
+
 ## Features
 
 - **Player panel** docked to the right edge: thumbnail, title, artist, progress,
